@@ -17,10 +17,11 @@ but `native_runtime_host.h:1798`'s `graphics` field is declared
 `## Design` for the corrected mechanism, a real, not-yet-confirmed puzzle
 in it (`systemD3D11CreateDevice()` appears to already leak a permanent
 reference to the same module this code frees), and the proposed fix.
-Implemented 2026-09-24: `NativeDevice::reset()` in `src\openxr\native_device.h`
-now sets `systemModule_ = nullptr` without calling `FreeLibrary()`, ensuring
-System32's `d3d11.dll` remains mapped for process lifetime to protect late calls
-from chained hooks (EDHM, Steam overlay).
+Built 2026-09-25, not flown: `NativeDevice::reset()` in `src\openxr\native_device.h`
+now sets `systemModule_ = nullptr` without calling `FreeLibrary()`, accompanied by
+a diagnostic probe logging `device_module_reset,still_loaded=...` via `GetModuleHandleExW`.
+The investigation stays open until a repro flight shows the crash gone and the new
+log line fired.
 
 Hypothesis, as corrected in `## Design`: `host_graphics_reset`
 (`src\openxr\native_runtime_host.h:1797-1798`) calls `NativeDevice::reset()`
@@ -307,9 +308,10 @@ late call left to land in the unmapped module.
 
 ## Design
 
-Started 2026-09-22, prompted by the user asking to design a real fix. This
-section is design only -- nothing below has been built, and no C++ has
-changed.
+Started 2026-09-22, prompted by the user asking to design a real fix. Built
+2026-09-25: `NativeDevice::reset()` in `src\openxr\native_device.h` retains
+`systemModule_` without `FreeLibrary()`, accompanied by the diagnostic probe
+logging `device_module_reset,still_loaded=...`. Not yet flown in a repro environment.
 
 ### What changed from the original write-up
 
