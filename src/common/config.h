@@ -36,6 +36,7 @@ public:
     std::string getString(const char* key, const char* def) const;
     // Diagnostic intent, before scope filtering; never enables a feature.
     std::string requestedTemporalMode() const;
+    bool        aoEyeSync() const;
 
     // The config audit's data: every key this build reads or documents
     // (lowercase), and the moved-from map ({old, new} dotted names) parsed at

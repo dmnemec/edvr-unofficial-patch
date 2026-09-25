@@ -390,6 +390,10 @@ std::string Config::requestedTemporalMode() const {
     return it == m_impl->values.end() ? "off" : it->second;
 }
 
+bool Config::aoEyeSync() const {
+    return getBool("fix.ao_eye_sync", false);
+}
+
 bool Config::getBool(const char* key, bool def) const {
     if (!runtimeProfileAllowsKey(key)) return false;
     std::string v = getString(key, "");

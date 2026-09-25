@@ -1,4 +1,4 @@
-﻿#include "../common/vr_census.h"
+#include "../common/vr_census.h"
 #include "exposure_fix.h"
 
 #include <windows.h>
@@ -46,6 +46,7 @@ constexpr size_t kSlotCSSetShader          = 69;
 // above have to be told about it.
 constexpr size_t kSlotClearState           = 110;
 constexpr size_t kHighestSlotUsed          = 110;
+constexpr uint64_t kAoReinterleaveBlurCs   = 0xD31E7812990B19A6ULL;
 
 // The slots the reclaim pass may vouch for, and the evidence that is allowed
 // to earn it -- which is NOT vscreen's evidence, and the difference is the
@@ -171,6 +172,16 @@ struct State {
     uint64_t pairSyncCopies = 0;
     bool     pairSyncNoted = false;
     char     pairSyncSpec[48] = {};
+
+    // Ambient occlusion eye sync (fix.ao_eye_sync): for HBAO reinterleave & blur
+    // compute shader (ch=D31E7812990B19A6), copy occurrence 1's UAV0 over
+    // occurrence 2's after it runs so both eyes receive identical ambient occlusion,
+    // eliminating crack and crevice flicker on asteroids.
+    bool     aoEyeSync = false;
+    uint8_t  aoSyncSeen = 0;
+    void*    aoFirstUav = nullptr;
+    uint64_t aoSyncCopies = 0;
+    bool     aoSyncNoted = false;
 
     // The CS b1 equaliser (experimental.dispatch_cb1_lend / _strip): round
     // fifteen of the FSS black squares. The round-fourteen census caught the
@@ -849,6 +860,42 @@ void STDMETHODCALLTYPE hookedDispatch(ID3D11DeviceContext* self, UINT x, UINT y,
         }
     }
 
+    // Ambient occlusion eye sync (fix.ao_eye_sync): for HBAO reinterleave & blur
+    // compute shader (D31E7812990B19A6), copy occurrence 1's UAV0 over
+    // occurrence 2's after it runs so both eyes receive identical ambient occlusion.
+    // Zero overhead when off (single bool check s->aoEyeSync).
+    if (s->aoEyeSync && hashOf(bindingGet(BindSlot::Cs)) == kAoReinterleaveBlurCs) {
+        ++s->aoSyncSeen;
+        if (s->aoSyncSeen == 1) {
+            s->aoFirstUav = bindingGet(BindSlot::CsUav0);
+        } else if (s->aoSyncSeen == 2 && s->aoFirstUav) {
+            void* secondUav = bindingGet(BindSlot::CsUav0);
+            s->computeThisFrame = true;
+            s->realDispatch(self, x, y, z);
+            guardedBudget(g_budget, [&] {
+                ID3D11Resource* a = nullptr;
+                ID3D11Resource* b = nullptr;
+                static_cast<ID3D11UnorderedAccessView*>(s->aoFirstUav)->GetResource(&a);
+                if (secondUav) {
+                    static_cast<ID3D11UnorderedAccessView*>(secondUav)->GetResource(&b);
+                }
+                if (a && b && a != b) {
+                    self->CopyResource(b, a);
+                    ++s->aoSyncCopies;
+                    if (!s->aoSyncNoted) {
+                        s->aoSyncNoted = true;
+                        Log::get().note(
+                            "ao_eye_sync: engaged -- ambient occlusion output "
+                            "(D31E7812990B19A6) synchronized from first eye to second eye.");
+                    }
+                }
+                if (a) a->Release();
+                if (b) b->Release();
+            });
+            return;   // forwarded above
+        }
+    }
+
     // The pair-sync experiment: occurrence 1 of the named shader lends its
     // UAV0; occurrence 2 runs its own dispatch and is then overwritten by a
     // CopyResource from the first -- both eyes read one eye's product. The
@@ -962,6 +1009,17 @@ uint64_t lookupShaderHash(void* shader) { return hashOf(shader); }
 void exposureConfigure(Config& cfg) {
     State* s = g_state;
     if (!s) return;
+
+    // Ambient occlusion eye sync (fix.ao_eye_sync)
+    {
+        const bool ao = cfg.getBool("fix.ao_eye_sync", false);
+        if (ao != s->aoEyeSync) {
+            s->aoEyeSync = ao;
+            s->aoSyncNoted = false;
+            Log::get().note("ao_eye_sync: %s",
+                            ao ? "ON (synchronizing HBAO between eyes)" : "OFF");
+        }
+    }
 
     // The dispatch-skip probe's spec: up to four 16-digit hex hashes (the
     // census's ch= column), comma separated; "ch:" prefixes tolerated since
@@ -1216,6 +1274,8 @@ void exposureFixFrameBoundary() {
     for (uint32_t i = 0; i < 4; ++i) s->dispatchOccSeen[i] = 0;
     s->pairSyncSeen = 0;
     s->pairSyncFirstUav = nullptr;
+    s->aoSyncSeen = 0;
+    s->aoFirstUav = nullptr;
 
     // Forget what was bound, once a frame.
     //
