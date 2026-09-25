@@ -46,8 +46,9 @@ extern bool g_particleHideStars;
 extern bool g_particleProbe;
 // The billboard transcriptions' vertex shader hashes, in kVariants order
 // (particle_fix.cpp static_asserts the two lists agree).
-inline constexpr uint64_t kParticleVariantVs[2] = {0xEB787F983BC1F5A3ull,
-                                                   0x6041FD2D3D0164E1ull};
+inline constexpr uint64_t kParticleVariantVs[3] = {0xEB787F983BC1F5A3ull,
+                                                   0x6041FD2D3D0164E1ull,
+                                                   0x68DDDEF04D9894AFull};
 }  // namespace detail
 inline bool particleSteady() { return detail::g_particleMode == detail::ParticleMode::kSteady; }
 
@@ -84,7 +85,8 @@ inline bool particleOnDrawMayMatch(char kind, uint32_t count, uint32_t instances
     if (instances == 0 || count < 6) return false;
     if (heldVsHash == 0) return true;
     return heldVsHash == detail::kParticleVariantVs[0] ||
-           heldVsHash == detail::kParticleVariantVs[1];
+           heldVsHash == detail::kParticleVariantVs[1] ||
+           heldVsHash == detail::kParticleVariantVs[2];
 }
 
 // Bind the substituted constants for one draw, and put the game's back.

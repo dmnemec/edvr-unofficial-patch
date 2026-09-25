@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "../common/config.h"
+#include "../common/runtime_profile.h"
 #include "../common/frame_flag.h"
 #include "../common/guard.h"
 #include "../common/hotkey.h"
@@ -27,6 +28,7 @@
 #include "../common/temporal_mode.h"
 #include "device_hook.h"
 #include "elite_binds.h"
+#include "flat_runtime.h"
 #include "input_gate.h"
 #include "menu_keys.h"
 #include "menu_panel.h"
@@ -166,6 +168,9 @@ struct State {
     uint64_t tickMs = 0;
 
     bool  open = false;
+    bool  flatEscapeDown = false;
+    bool  flatKeysReadyShown = false;
+    bool  flatNativeScaleShown = false;
     float alpha = 0.0f;
     uint64_t openedMs = 0;
     uint64_t lastInputMs = 0;
@@ -236,6 +241,7 @@ struct State {
     // down: re-anchored to the head every frame, re-rasterised twice a
     // second.
     bool     overlay = false;
+    bool     overlayLock = false;
     float    overlayYaw = 0.0f;
     float    overlayPitch = -16.0f;
     bool     overlayUp = false;
@@ -243,6 +249,12 @@ struct State {
     uint64_t overlayTextMs = 0;
     std::string overlayText;
     float    overlayTextDeg = 0.0f;
+    // The menu-embedded copy's own refresh clock (menu.fps_overlay_lock).
+    // Kept apart from overlayTextMs: the floating readout's own block runs
+    // first each tick and, on its own cadence, resets that field to "now"
+    // before this one's check ever sees it due -- a shared field starved
+    // the embedded copy's refresh outright (found 2026-09-25).
+    uint64_t menuOverlayTextMs = 0;
 
     // Restart bookkeeping.
     bool snapshotTaken = false;
@@ -271,7 +283,19 @@ std::string dottedOf(const MenuRowDef& d) {
 }
 
 std::string rowValue(const MenuRowDef& d) {
+    if (runtimeFlatProfile() && strcmp(d.section, "fix") == 0 &&
+        strcmp(d.key, "temporal_aa") == 0)
+        return Config::get().requestedTemporalMode();
     return Config::get().getString(dottedOf(d).c_str(), d.shipped);
+}
+
+bool flatDlssSelected() {
+    for (int i = 0; i < kRowDefCount; ++i)
+        if (strcmp(kMenuRows[i].section, "fix") == 0 &&
+            strcmp(kMenuRows[i].key, "temporal_aa") == 0)
+            return _stricmp(g_rows[i].value.c_str(), "dlss") == 0 ||
+                   _stricmp(g_rows[i].value.c_str(), "dlaa") == 0;
+    return false;
 }
 
 bool boolOf(const std::string& v, bool def) {
@@ -333,6 +357,7 @@ bool isDlssPresetRow(const MenuRowDef& d) {
 }
 
 bool dlssPresetDisabled() {
+    if (runtimeFlatProfile()) return !flatDlssSelected();
     return temporalEngineFor(Config::get().getString("fix.temporal_aa", "off")) !=
            TemporalEngine::Nvidia;
 }
@@ -970,6 +995,7 @@ struct ChoiceItem {
 };
 
 const char* nvidiaLabel() {
+    if (runtimeFlatProfile()) return flatRuntimeNativeScale() ? "DLAA" : "DLSS";
     float quality = 0.0f;
     deviceHookHmdQuality(&quality);
     return temporalNvidiaLabel(quality);
@@ -995,6 +1021,13 @@ std::vector<ChoiceItem> choicesOf(const MenuRowDef& d) {
             }
             if (strcmp(d.section, "fix") == 0 && strcmp(d.key, "temporal_aa") == 0 && c.value == "dlss") {
                 c.label = nvidiaLabel();
+            }
+            if (runtimeFlatProfile() && strcmp(d.section, "fix") == 0 &&
+                strcmp(d.key, "temporal_aa") == 0) {
+                if (c.value == "off") c.label = "Off";
+                else if (c.value == "on") c.label = "TAA";
+                else if (c.value == "dlss") c.label = nvidiaLabel();
+                else if (c.value == "fsr") c.label = "FSR3";
             }
             out.push_back(c);
         }
@@ -1346,6 +1379,26 @@ void buildPages() {
     const int keepScroll = s.pages.empty() ? 0 : s.pages[s.page].scroll;
     const size_t keepCount = s.pages.empty() ? 0 : s.pages[s.page].entries.size();
     s.pages.clear();
+    if (runtimeFlatProfile()) {
+        Page p;
+        p.name = "Flat graphics";
+        for (int i = 0; i < kRowDefCount; ++i) {
+            const MenuRowDef& d = kMenuRows[i];
+            if (strcmp(d.section, "fix") != 0) continue;
+            if (strcmp(d.key, "temporal_aa") != 0 &&
+                strcmp(d.key, "temporal_aa_model") != 0) continue;
+            Entry e;
+            e.kind = EntryKind::Setting;
+            e.def = i;
+            p.entries.push_back(e);
+        }
+        firstSelectable(p);
+        s.pages.push_back(p);
+        s.page = 0;
+        s.developerBuilt = s.developer;
+        s.contentDirty = true;
+        return;
+    }
     {
         Page p;
         p.name = "Performance";
@@ -1771,6 +1824,11 @@ float panelShift(float halfW, bool withTip) {
 // panel: the panel is specified in degrees, so it reads the same size in
 // any headset and composites near 1:1. `withTip` adds the strip.
 void sizeContent(MenuContent& c, float widthDeg, float textDeg, bool withTip = false) {
+    if (runtimeFlatProfile()) {
+        c.cardPx = c.widthPx = 860;
+        c.capPx = 34;
+        return;
+    }
     float ppd = 45.0f;
     uint32_t ew = 0, eh = 0;
     float outer = 0.0f, inner = 0.0f;
@@ -1804,6 +1862,15 @@ void buildContent(MenuContent& c) {
     memset(&c, 0, sizeof(c));
     c.popupLine = -1;
     sizeContent(c, s.widthDeg, s.textDeg, tooltipsOn());
+
+    // If the FPS overlay is locked to the menu, show the same readout at the
+    // top of the menu panel so both are visible for A/B testing.
+    if (s.overlay && s.overlayLock) {
+        char line[120];
+        perfMonitorOverlayLine(line, sizeof(line));
+        strncpy(c.overlayLine, line, sizeof(c.overlayLine) - 1);
+        c.overlayLine[sizeof(c.overlayLine) - 1] = 0;
+    }
 
     // The tab strip: a window of pages that fits the panel, always
     // including the current one, with an arrow at whichever end has more.
@@ -1917,8 +1984,13 @@ void buildContent(MenuContent& c) {
             l.dim = dim;
             strncpy(l.left, d.label, sizeof(l.left) - 1);
             if (dlssRow) {
-                const std::string mode = Config::get().getString("fix.temporal_aa", "off");
+                const std::string mode = runtimeFlatProfile() ? Config::get().requestedTemporalMode()
+                                                              : Config::get().getString("fix.temporal_aa", "off");
                 snprintf(l.left, sizeof(l.left), "%s preset", _stricmp(mode.c_str(), "dlaa") == 0 ? "DLAA" : nvidiaLabel());
+            }
+            if (runtimeFlatProfile() && strcmp(d.section, "fix") == 0 &&
+                strcmp(d.key, "temporal_aa") == 0) {
+                strncpy(l.left, "Anti-aliasing", sizeof(l.left) - 1);
             }
             const bool openxrScaleRow = isOpenxrRenderScaleRow(d);
             const bool headsetRow = isHeadsetRow(d);
@@ -1973,6 +2045,8 @@ void buildContent(MenuContent& c) {
                       : hi        ? kMenuRowHi
                       : dim       ? kMenuDim
                                   : kMenuRow;
+            if (hi && dim && runtimeFlatProfile())
+                snprintf(c.hint, sizeof(c.hint), "Choose DLSS to change its model preset.");
             if (hi && openxrScaleRow) {
                 snprintf(c.hint, sizeof(c.hint), "%s", openxrResolutionHint(res).c_str());
             }
@@ -2121,6 +2195,16 @@ void buildContent(MenuContent& c) {
     // THE GAME had never been visible -- the likeliest root of "how do I
     // change tabs". The width is the card less the raster's pad either
     // side (menu_panel.cpp: pad = cap * 8 / 10).
+    if (runtimeFlatProfile()) {
+        const char* status = "";
+        if (!s.flatKeysReadyShown) status = " | keyboard gate unavailable";
+        else if (s.lastWrite.compare(0, 8, "writing ") == 0) status = " | saving";
+        else if (s.lastWrite.compare(0, 7, "FAILED:") == 0) status = " | write failed";
+        else if (!s.lastWrite.empty()) status = " | saved";
+        snprintf(c.footer, sizeof(c.footer), "Up/Down row  Left/Right change\n%s/Esc close%s",
+                 s.summonName.c_str(), status);
+        return;
+    }
     {
         MenuFooterInput in = {};
         in.editing = s.editEntry >= 0;
@@ -3193,6 +3277,25 @@ void latchAnchor(float yawDeg, float pitchDeg) {
 
 void openMenu(uint64_t now) {
     State& s = g_s;
+    if (runtimeFlatProfile()) {
+        inputGateInstall();
+        for (KeyRepeat& k : s.keys) keyRepeatPrime(k, rawKeyDown(k.vk));
+        for (KeyRepeat& k : s.editKeys) keyRepeatPrime(k, rawKeyDown(k.vk));
+        buildPages();
+        refreshRowValues();
+        s.open = true;
+        s.openedMs = s.lastInputMs = s.highlightSinceMs = now;
+        s.lastDrawn = menuDrawnValue();
+        s.lastDrawnMs = 0;
+        s.flatEscapeDown = rawKeyDown(VK_ESCAPE);
+        s.flatNativeScaleShown = flatRuntimeNativeScale();
+        s.alpha = 1.0f;
+        s.tooltipUp = false;
+        s.contentDirty = true;
+        Log::get().note("menu: flat graphics panel open; keyboard %s.",
+                        s.privateWanted ? "private" : "shared");
+        return;
+    }
     if (!glitchConsumerPresent() && !nativeMenuAvailable()) {
         if (!s.noConsumerNoted) {
             s.noConsumerNoted = true;
@@ -3297,6 +3400,33 @@ void menuAdoptGameBindings(bool enabled, const char* why) {
 
 void menuConfigure(Config& cfg) {
     State& s = g_s;
+    if (runtimeFlatProfile()) {
+        const std::string key = cfg.getString("hotkey.menu", "F8");
+        if (!s.configured || key != s.summonName) {
+            s.summonName = key;
+            s.summon.setBinding(key.c_str());
+        }
+        s.privateWanted = true;
+        s.aimMode = 1;
+        s.tooltipDelayS = 0.0f;
+        s.toasts = false;
+        s.overlay = false;
+        inputGateConfigure(cfg);
+        if (!s.configured) {
+            s.configured = true;
+            initKeys();
+            refreshRowValues();
+            takeSnapshot();
+            buildPages();
+            Log::get().note("menu: flat graphics panel configured; summon with %s.", key.c_str());
+        }
+        return;
+    }
+    if (!runtimeVrProfile()) {
+        s.configured = false;
+        s.summon.setBinding("");
+        return;
+    }
     const std::string key = cfg.getString("hotkey.menu", "F8");
     const bool summonChanged = key != s.summonName || !s.configured;
     if (summonChanged) {
@@ -3392,14 +3522,22 @@ void menuConfigure(Config& cfg) {
     s.toasts = cfg.getBool("menu.toasts", true);
     {
         const bool ov = cfg.getBool("menu.fps_overlay", false);
+        const bool ovLock = cfg.getBool("menu.fps_overlay_lock", false);
         float yaw = cfg.getFloat("menu.fps_overlay_yaw", 0.0f);
         float pitch = cfg.getFloat("menu.fps_overlay_pitch", 20.0f);
         if (!(yaw >= -60.0f) || yaw > 60.0f) yaw = 0.0f;
         if (!(pitch >= -45.0f) || pitch > 45.0f) pitch = 20.0f;
         if (s.configured && ov != s.overlay) {
             Log::get().note("menu: the frame-rate overlay is %s.", ov ? "on" : "off");
+            if (s.open && (ovLock || s.overlayLock)) s.contentDirty = true;
+        }
+        if (s.configured && ovLock != s.overlayLock) {
+            Log::get().note("menu: the frame-rate overlay is %s while the menu is open.",
+                            ovLock ? "locked on" : "no longer locked");
+            if (s.open && ov) s.contentDirty = true;
         }
         s.overlay = ov;
+        s.overlayLock = ovLock;
         s.overlayYaw = yaw;
         s.overlayPitch = pitch;
     }
@@ -3521,9 +3659,88 @@ void menuNoteConfigReloaded() {
     }
 }
 
+void menuFlatBeforePresent(IDXGISwapChain* swap, unsigned flags) {
+    if (!runtimeFlatProfile() || !g_s.configured || !g_s.open ||
+        (flags & DXGI_PRESENT_TEST)) return;
+    menuPanelCompositeFlat(swap);
+}
+
+void menuFlatResize() {
+    if (!runtimeFlatProfile()) return;
+    menuPanelFlatResize();
+    g_s.lastDrawn = menuDrawnValue();
+    g_s.lastDrawnMs = 0;
+    g_s.contentDirty = true;
+    inputGateSetPrivate(false);
+}
+
 void menuTick(ID3D11Device* dev) {
     State& s = g_s;
     if (!s.configured) return;
+    if (runtimeFlatProfile()) {
+        guardedBudget(g_budget, [&] {
+            const uint64_t now = nowMs();
+            s.tickMs = now;
+            drainWrites();
+            if (s.summon.pressed()) {
+                if (s.open) closeMenu("the menu key");
+                else openMenu(now);
+            }
+            if (s.summon.takeMissedWhileUnfocused())
+                Log::get().note("menu: %s was pressed while Elite was unfocused.",
+                                s.summonName.c_str());
+            if (s.open && !gameHasFocus()) closeMenu("Elite lost focus");
+            if (s.open) {
+                const bool esc = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+                if (esc && !s.flatEscapeDown) {
+                    if (s.editEntry >= 0) cancelEdit();
+                    else closeMenu("Escape");
+                }
+                s.flatEscapeDown = esc;
+            }
+            const uint32_t drawn = menuDrawnValue();
+            if (drawn != s.lastDrawn) {
+                s.lastDrawn = drawn;
+                s.lastDrawnMs = now;
+            }
+            if (s.open && now - s.openedMs > kNotDrawnCloseMs &&
+                now - s.lastDrawnMs > kNotDrawnCloseMs) {
+                Log::get().note("menu: flat panel was not drawn; closing and releasing keyboard.");
+                closeMenu("not drawn");
+            }
+            const bool drawnFresh = s.open && s.lastDrawnMs != 0 &&
+                                    now - s.lastDrawnMs <= kDrawnFreshMs;
+            inputGateSetPrivate(drawnFresh);
+            const bool keysReady = drawnFresh && inputGateHoldsGameKeyboard();
+            if (keysReady != s.flatKeysReadyShown) {
+                s.flatKeysReadyShown = keysReady;
+                s.contentDirty = true;
+            }
+            const bool nativeScale = flatRuntimeNativeScale();
+            if (nativeScale != s.flatNativeScaleShown) {
+                s.flatNativeScaleShown = nativeScale;
+                s.contentDirty = true;
+            }
+            if (keysReady) handleKeys(now);
+            if (s.open && dev && !menuPanelFlatRasterReady()) s.contentDirty = true;
+            if (s.open && s.contentDirty) {
+                s.contentDirty = false;
+                MenuContent c;
+                buildContent(c);
+                menuPanelSubmit(c);
+            }
+            MenuGeometry g;
+            g.dist = 1.0f;
+            g.curve = 0.0f;
+            g.halfW = 0.62f;
+            g.alpha = s.open ? 1.0f : 0.0f;
+            menuPanelSetGeometry(g);
+            inputGateTick();
+            if (dev) menuPanelTick(dev);
+        });
+        if (!g_budget.shouldRun()) inputGateSetPrivate(false);
+        return;
+    }
     guardedBudget(g_budget, [&] {
         static uint64_t lastNativeRevision = 0;
         const uint64_t nativeRevision = nativeMenuRevision();
@@ -3742,6 +3959,12 @@ void menuTick(ID3D11Device* dev) {
             Page& p = s.pages[s.page];
             if (p.status && dueMs(s.statusRefreshMs, p.monitor ? kMonitorRefreshMs : kStatusRefreshMs)) {
                 s.statusRefreshMs = stampMs();
+                s.contentDirty = true;
+            }
+            // The locked FPS readout refreshes at the same cadence as the
+            // head-locked overlay: twice a second, cheaply.
+            if (s.open && s.overlay && s.overlayLock && dueMs(s.menuOverlayTextMs, 500)) {
+                s.menuOverlayTextMs = stampMs();
                 s.contentDirty = true;
             }
             if (s.contentDirty) {

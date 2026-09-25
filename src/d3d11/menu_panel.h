@@ -31,6 +31,7 @@
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct ID3D11Texture2D;
+struct IDXGISwapChain;
 
 namespace edvr {
 
@@ -109,6 +110,9 @@ constexpr int kMenuMaxGraphs = 2;
 // Everything the panel shows, as text. The model builds one of these on
 // every change; the raster lays it out.
 struct MenuContent {
+    // A one-line FPS readout drawn at the top of the menu card when the user
+    // has locked the overlay to the menu, so both are visible for A/B testing.
+    char     overlayLine[120];
     // The tabs the strip shows: a window of the pages that fits the panel,
     // `activeTab` indexing THIS array. An arrow at either end says there
     // are pages that way.
@@ -201,6 +205,13 @@ bool menuPanelWorkerReadyForTest();
 
 // Once per frame: upload a finished raster, create the texture as needed.
 void menuPanelTick(ID3D11Device* dev);
+
+// Desktop profile: blend the live raster onto the owned backbuffer. Does
+// nothing when hidden; no backbuffer reference survives the call.
+bool menuPanelCompositeFlat(IDXGISwapChain* swap);
+bool menuPanelCompositeFlatTexture(ID3D11Texture2D* back);
+bool menuPanelFlatRasterReady();
+void menuPanelFlatResize();
 
 void menuPanelSetGeometry(const MenuGeometry& g);
 

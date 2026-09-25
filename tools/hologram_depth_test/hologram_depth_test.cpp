@@ -80,8 +80,14 @@ ID3D11PixelShader* shaderSwapCompilePs(ID3D11DeviceContext* ctx, const char* sou
     if (FAILED(dev->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader))) std::abort();
     return shader;
 }
-ID3D11ComputeShader* shaderSwapCompileCs(ID3D11DeviceContext*, const char*, size_t,
-    const char*, const char*, const SwapMacro*, const char*) { std::abort(); }
+ID3D11ComputeShader* shaderSwapCompileCs(ID3D11DeviceContext* ctx, const char* source, size_t,
+    const char*, const char*, const SwapMacro*, const char*) {
+    auto code = ::compile(source, "cs_5_0");
+    ComPtr<ID3D11Device> dev; ctx->GetDevice(&dev);
+    ID3D11ComputeShader* shader = nullptr;
+    if (FAILED(dev->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader))) std::abort();
+    return shader;
+}
 float temporalPassDepthAt(float metres) { return 0.025f / metres; }
 bool temporalPassPlanes(float* nearZ, float* farZ) { *nearZ = .025f; *farZ = 10000; return true; }
 bool depthProbeSceneDepthFormat(uint32_t, uint32_t, int, ID3D11Texture2D** tex, uint32_t* fmt) {
@@ -372,13 +378,19 @@ int main() {
     };
     constexpr float kNear5m = 0.005f;    // 0.025 / 5
     constexpr float kNear50m = 0.0005f;  // 0.025 / 50, beyond the 10 m radius
+    // Not constexpr: reads g_cockpitMetres, set just above. The live call
+    // (not a hand-computed literal) is what a covered dark pixel writes
+    // now instead of its element's own depth (round 9).
+    const float kFillerDepth = temporalPassDepthAt(g_cockpitMetres * kHoloFillerFraction);
+    // A world marker hash never in g_holoMarkerDepthShaders, for the
+    // fallback cases -- any value but kHoloWorldMarkerReticle's own.
+    constexpr uint64_t kHoloUnlistedMarker = 0x1111111111111111ull;
 
     // T1/T2: a listed quad at cockpit depth (5 m, inside the radius) over
     // far scene depth (0 = reversed-Z far, "the sky") -- SRC_ALPHA/ONE,
     // alpha 1: bright left half (0.5) clears the 0.05 floor, dim right
-    // (0.02) does not -- round 6 changed T2: dark, but inside a cockpit-
-    // range element's own footprint, so it now takes the element's depth
-    // too (the dark-pixel rule below), where it used to leave the sky's.
+    // (0.02) does not, but is near-light covered (real light in the very
+    // same, only, 8x8 block) so it takes the filler depth, not T1's own.
     {
         const float left[4] = {0.5f, 0.5f, 0.5f, 1.0f}, right[4] = {0.02f, 0.02f, 0.02f, 1.0f};
         originalDraw(kNear5m, left, right, blendSrcAlphaOne.Get(), false, kBlack, true);
@@ -386,16 +398,19 @@ int main() {
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr), "resolve runs (T1/T2)");
         auto values = privateDepth();
         check(std::fabs(values[1] - kNear5m) < 1e-5f, "T1: bright half above the floor gets the element depth");
-        check(std::fabs(values[6] - kNear5m) < 1e-5f, "T2: dark fringe inside the cockpit-range footprint now gets it too");
+        check(std::fabs(values[6] - kFillerDepth) < 1e-5f, "T2: dark fringe near the bright half's light gets the filler depth");
     }
 
     // Alpha regression: (1,1,1, a=0.01) under SRC_ALPHA/ONE contributes
     // 0.01*1 = 0.01, below the floor -- the bug the formula max(luma,
     // a*luma) missed (it is just luma, alpha never actually applied).
-    // Round 6: dark-but-cockpit-range now covers regardless of exactly how
-    // dark, so coverage alone no longer distinguishes 0.01 from a
-    // regressed 1.0 here; read the raw contribution instead, which still
-    // does.
+    // Round 6 covered this (dark-but-cockpit-range, no distance limit),
+    // which stopped distinguishing 0.01 from a regressed 1.0 by coverage
+    // alone; round 7 narrows coverage back to near an element's own
+    // light, and this whole quad is uniformly this dim colour -- no
+    // pixel anywhere in it ever qualifies as light, so it goes back to
+    // not covered, and the raw-contribution read added in round 6 is
+    // what still guards the alpha formula itself.
     {
         g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
         const float rgba[4] = {1.0f, 1.0f, 1.0f, 0.01f};
@@ -407,7 +422,7 @@ int main() {
         for (float v : readContribR(dev.Get(), ctx.Get(), contribRes.Get()))
             check(std::fabs(v - 0.01f) < 1e-3f, "alpha regression: contribution is alpha-weighted (0.01), not luma-only (1.0)");
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr), "resolve runs (alpha regression)");
-        for (float v : privateDepth()) check(std::fabs(v - kNear5m) < 1e-5f, "alpha regression: dark, cockpit-range, now covered");
+        for (float v : privateDepth()) check(v == 0.0f, "alpha regression: dark with no light anywhere nearby is not covered");
     }
 
     // Premultiplied: ONE/INV_SRC_ALPHA, (0.3,0.3,0.3,0.3) over black --
@@ -459,14 +474,16 @@ int main() {
     // is elsewhere on this page -- the classifier itself is untestable
     // under the aborting binding shadow). ContributionBegin now picks the
     // DepthEnable-FALSE state, so this element DOES contribute, and its
-    // own depth (50 m) is what the resolve stamps.
+    // own depth (50 m) is what the resolve stamps. kHoloUnlistedMarker,
+    // not the reticle's own hash: this rig's toyVs has no TEXCOORD6/7, so
+    // it cannot link against the reticle's own matched PS (round 8).
     {
         g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
         ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
         const float rgba[4] = {0.5f, 0.5f, 0.5f, 1.0f};
         g_holoIsWorldMarker = true;
         originalDraw(kNear50m, rgba, rgba, blendSrcAlphaOne.Get(), false, kBlack, true);
-        g_holoDrawVs = kHoloWorldMarkerReticle;
+        g_holoDrawVs = kHoloUnlistedMarker;
         listedReissue();
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr), "resolve runs (world marker)");
         for (float v : privateDepth())
@@ -566,10 +583,10 @@ int main() {
 
         // Over black, display 0.02, floor 0.05: the floor reads the
         // DISPLAY, not the (otherwise ample) HDR light -- dark by that
-        // measure. Round 6: dark inside this element's own footprint,
-        // within the cockpit radius, now takes its depth anyway (an
-        // exposure-dimmed pixel is exactly the "gap" case, just from
-        // tonemapping instead of a text gap).
+        // measure, and this whole quad's display is uniformly this dim,
+        // so it is never near-light either (round 7): an exposure-dimmed
+        // pixel with nothing bright nearby stays uncovered, same as
+        // round 5.
         g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
         const float bright[4] = {0.5f, 0.5f, 0.5f, 1.0f};
         drawIntoRtv(hdrRtv.Get(), kNear5m, bright, bright, blendSrcAlphaOne.Get(), kBlack, true);
@@ -577,7 +594,7 @@ int main() {
         auto display02 = makeDisplay(0.02f);
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, display02.Get()), "resolve runs (HDR, floor on display)");
         for (float v : privateDepth())
-            check(std::fabs(v - kNear5m) < 1e-5f, "HDR: a dim display pixel inside the cockpit-range footprint is covered anyway");
+            check(v == 0.0f, "HDR: a uniformly dim display, nowhere near light, is not covered");
 
         // A target with no SHADER_RESOURCE bind: the share test is skipped
         // outright (the no-target counter moves), the floor on the display
@@ -609,12 +626,12 @@ int main() {
     // nearer overlaps it and it stays uncovered). Its element depth does
     // write (the scratch clears to 0), but the near quad's own element
     // depth (5 m, nearer) overwrites it: the resolved geometry at these
-    // pixels is the NEAR quad's own, not the corona's. Round 6: that near
-    // quad is genuinely dark and inside the cockpit radius -- exactly the
-    // gap case -- so it now takes its own (5 m) depth, never the corona's
-    // 50 m. This is the near quad's own dark pixel, not the corona
-    // reaching anything; a corona with nothing nearer overlapping it is
-    // still excluded ("beyond radius" above).
+    // pixels is the NEAR quad's own, not the corona's. Round 6 covered
+    // that near quad's own dark pixel outright (dark-but-cockpit-range,
+    // no distance limit); round 7 requires nearby light too, and this
+    // near quad is uniformly black -- no light of its own anywhere -- so
+    // it goes back to uncovered, the same as if the corona were not
+    // there at all.
     {
         g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
         ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
@@ -626,7 +643,7 @@ int main() {
         listedReissue();
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr), "resolve runs (sun corona)");
         for (float v : privateDepth())
-            check(std::fabs(v - kNear5m) < 1e-5f, "sun corona: the near quad's own dark pixel takes its own depth, never the corona's");
+            check(v == 0.0f, "sun corona: the near quad's own dark pixel has no light of its own nearby, so stays uncovered");
     }
 
     // State: CULL_BACK and a 1x1 viewport bound before the resolve --
@@ -662,8 +679,9 @@ int main() {
     // never auto-encodes -- holds it raw, i.e. linear), reads as display
     // brightness ~0.15 once encoded for the floor test: above a 0.1
     // floor. The identical value through a plain view is already
-    // "display" as stored, 0.02: below it, dark -- and, round 6, inside
-    // this cockpit-range element's own footprint, so it is covered anyway.
+    // "display" as stored, 0.02: below it, dark, and (round 7) uniformly
+    // dim across the whole quad -- no light anywhere nearby, so it stays
+    // uncovered.
     {
         const float savedFloor = g_holoFloor;
         g_holoFloor = 0.1f;
@@ -680,16 +698,16 @@ int main() {
         listedReissue();
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr), "resolve runs (plain view)");
         for (float v : privateDepth())
-            check(std::fabs(v - kNear5m) < 1e-5f, "sRGB: the same 0.02 through a plain view is dark, cockpit-range, and covered");
+            check(v == 0.0f, "sRGB: the same 0.02 through a plain view is dark with no light nearby, not covered");
         g_holoFloor = savedFloor;
     }
 
-    // Dark-pixel cockpit-range coverage (round 6): a panel with a bright
-    // "glyph" half and a literal black "gap" half, within the cockpit
-    // radius -- both take the panel's own depth now, where the gap used
-    // to leave the sky's. (T2 above uses a near-black 0.02 fringe instead,
-    // for the floor threshold itself; this is the literal glyph/gap
-    // scenario flight 20260924_175113/20260925_050051 named.)
+    // Dark-pixel cockpit-range coverage: a panel with a bright "glyph"
+    // half and a literal black "gap" half, within the cockpit radius --
+    // the glyph keeps the panel's own depth, the gap the filler, where it
+    // used to leave the sky's. (T2 above uses a near-black 0.02 fringe
+    // instead, for the floor threshold itself; this is the literal
+    // glyph/gap scenario flight 20260924_175113/20260925_050051 named.)
     {
         g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
         ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
@@ -697,8 +715,13 @@ int main() {
         originalDraw(kNear5m, glyph, gap, blendSrcAlphaOne.Get(), false, kBlack, true);
         listedReissue();
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr), "resolve runs (glyph/gap, cockpit range)");
-        for (float v : privateDepth())
-            check(std::fabs(v - kNear5m) < 1e-5f, "glyph/gap: both the bright glyph and the black gap are covered within the cockpit radius");
+        auto values = privateDepth();
+        for (unsigned y = 0; y < 8; ++y) for (unsigned x = 0; x < 8; ++x) {
+            const float expected = x < 4 ? kNear5m : kFillerDepth;
+            check(std::fabs(values[y * 8 + x] - expected) < 1e-5f,
+                  x < 4 ? "glyph/gap: the bright glyph keeps the panel's own depth within the cockpit radius"
+                        : "glyph/gap: the black gap near it takes the filler depth within the cockpit radius");
+        }
     }
 
     // The same panel beyond the radius: the glyph is not covered (its
@@ -720,7 +743,7 @@ int main() {
         g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
         ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
         g_holoIsWorldMarker = true;
-        g_holoDrawVs = kHoloWorldMarkerReticle;
+        g_holoDrawVs = kHoloUnlistedMarker;   // toyVs has no TEXCOORD6/7 (round 8)
         originalDraw(kNear50m, glyph, gap, blendSrcAlphaOne.Get(), false, kBlack, true);
         listedReissue();
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr), "resolve runs (glyph/gap, beyond radius, world marker)");
@@ -730,21 +753,27 @@ int main() {
         g_holoIsWorldMarker = false;
     }
 
-    // Star: a dark cockpit footprint (near-zero contribution everywhere)
-    // with one bright background pixel already in the scene, showing
-    // through -- the star itself must still fail the share test (its
-    // brightness is not this element's own light), while the genuinely
-    // dark pixels around it, now within the cockpit radius, are covered.
+    // Star: a glyph/gap element (as above) with one bright background
+    // pixel already in the scene, in the gap half -- the star itself
+    // must still fail the share test (its brightness is not this
+    // element's own light), while the genuinely dark gap pixels around
+    // it, near the glyph's real light in the same near-light block, take
+    // the filler depth (the glyph itself keeps the element's own). The
+    // element needs its own real light SOMEWHERE for near-light to cover
+    // anything at all (a uniformly dark quad does not -- see the alpha
+    // regression, HDR and sRGB cases above), so the glyph half is what
+    // still makes this test meaningful.
     {
         g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
         ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
-        const float dark[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-        drawIntoRtv(hdrRtv.Get(), kNear5m, dark, dark, blendSrcAlphaOne.Get(), kBlack, true);
+        const float glyph[4] = {0.6f, 0.6f, 0.6f, 1.0f}, gap[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        drawIntoRtv(hdrRtv.Get(), kNear5m, glyph, gap, blendSrcAlphaOne.Get(), kBlack, true);
         listedReissue();
         // A one-pixel "star" already in the scene, unrelated to this
         // element's own blend: written directly into the HDR target
-        // through a 1x1 viewport at (3,3), never through the contribution
-        // pass, so Contribution stays 0 there just like everywhere else.
+        // through a 1x1 viewport at (6,3) -- inside the gap half, away
+        // from the glyph -- never through the contribution pass, so
+        // Contribution stays 0 there just like the rest of the gap.
         {
             const float star[4] = {0.9f, 0.9f, 0.9f, 1.0f};
             const float data[12] = {star[0], star[1], star[2], star[3], star[0], star[1], star[2], star[3], 0, 0, 0, 0};
@@ -753,15 +782,18 @@ int main() {
             ctx->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFFu);
             ctx->VSSetShader(toyVs.Get(), nullptr, 0);
             ctx->PSSetShader(toyPs.Get(), nullptr, 0);
-            const D3D11_VIEWPORT starVp{3, 3, 1, 1, 0, 1};
+            const D3D11_VIEWPORT starVp{6, 3, 1, 1, 0, 1};
             ctx->RSSetViewports(1, &starVp);
             ctx->Draw(3, 0);
             ctx->RSSetViewports(1, &vp8);
         }
-        // The display mirrors the star: bright at (3,3), well under the
-        // 0.05 floor everywhere else.
+        // The display mirrors the scene: bright over the glyph half and
+        // at the star, well under the 0.05 floor everywhere else in the
+        // gap.
         std::vector<unsigned char> starDisplay(8 * 8 * 4, 2);
-        for (unsigned c = 0; c < 4; ++c) starDisplay[4 * (3 * 8 + 3) + c] = 230;
+        for (unsigned y = 0; y < 8; ++y) for (unsigned x = 0; x < 4; ++x)
+            for (unsigned c = 0; c < 4; ++c) starDisplay[4 * (y * 8 + x) + c] = 200;
+        for (unsigned c = 0; c < 4; ++c) starDisplay[4 * (3 * 8 + 6) + c] = 230;
         D3D11_TEXTURE2D_DESC dd{};
         dd.Width = dd.Height = 8; dd.MipLevels = dd.ArraySize = 1;
         dd.Format = DXGI_FORMAT_R8G8B8A8_UNORM; dd.SampleDesc.Count = 1;
@@ -772,11 +804,255 @@ int main() {
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, starSrv.Get()), "resolve runs (star)");
         auto values = privateDepth();
         for (unsigned y = 0; y < 8; ++y) for (unsigned x = 0; x < 8; ++x) {
-            const bool starPixel = (x == 3 && y == 3);
-            check(std::fabs(values[y * 8 + x] - (starPixel ? 0.0f : kNear5m)) < 1e-5f,
-                  starPixel ? "star: the bright background pixel itself is not covered"
-                            : "star: the dark pixels around it are covered");
+            const bool starPixel = (x == 6 && y == 3);
+            const float expected = starPixel ? 0.0f : (x < 4 ? kNear5m : kFillerDepth);
+            const char* label = starPixel ? "star: the bright background pixel itself is not covered"
+                               : x < 4    ? "star: the glyph keeps the element's own depth"
+                                          : "star: the dark gap pixels near the glyph take the filler depth";
+            check(std::fabs(values[y * 8 + x] - expected) < 1e-5f, label);
         }
+    }
+
+    // The near-light radius, and the round-6 regression it fixes: a wide
+    // (48x8, six blocks) panel lit only in its first 4 px (block 0). A
+    // dark pixel 12 px from that light (x=15, block 1, block 0's
+    // neighbour) takes the filler depth; one 30 px away (x=33, block 4)
+    // does not, nor one 40 px away (x=43, block 5) -- open sky well
+    // outside the light's own block or its neighbours, the flight
+    // 20260925_080452 regression (a sky patch outside the weapons
+    // panel's visible frame, inside its oversized null-PS footprint,
+    // stamped by round 6's unbounded dark-pixel rule).
+    //
+    // Every earlier resolve above also queued a near-light census copy,
+    // and nothing has polled the ring yet (production polls it every
+    // frame boundary; this rig does not run one). A partial drain would
+    // leave straggler slots still pending, marked pending forever until
+    // some later poll catches them -- and the very next check below reads
+    // g_holoNearLightSamples[0] expecting THIS test's own sample, not a
+    // straggler from an unrelated earlier scene. Drain fully (three
+    // stable rounds finding nothing new) before resetting the count.
+    {
+        const auto drainDeadline = GetTickCount64() + 2000;
+        uint32_t totalDrained = 0, stableRounds = 0;
+        while (stableRounds < 3 && GetTickCount64() < drainDeadline) {
+            const uint32_t before = g_holoNearLightSampleCount;
+            holoPollNearLightCounts(ctx.Get());
+            const uint32_t got = g_holoNearLightSampleCount - before;
+            totalDrained += got;
+            stableRounds = got == 0 ? stableRounds + 1 : 0;
+        }
+        (void)totalDrained;
+        bool anyPending = false;
+        for (uint32_t i = 0; i < kHoloQueryRing; ++i) anyPending = anyPending || g_holoScratch[0].nearLightStagePending[i];
+        check(!anyPending, "near-light radius: the census ring is drained before this test");
+        g_holoNearLightSampleCount = 0;
+    }
+    {
+        constexpr UINT kWideW = 48, kWideH = 8;
+        D3D11_TEXTURE2D_DESC wsd{};
+        wsd.Width = kWideW; wsd.Height = kWideH; wsd.MipLevels = wsd.ArraySize = 1;
+        wsd.Format = DXGI_FORMAT_R32_TYPELESS; wsd.SampleDesc.Count = 1;
+        wsd.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+        ComPtr<ID3D11Texture2D> wideScene; hr(dev->CreateTexture2D(&wsd, nullptr, &wideScene));
+        D3D11_DEPTH_STENCIL_VIEW_DESC wdvd{};
+        wdvd.Format = DXGI_FORMAT_D32_FLOAT; wdvd.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+        ComPtr<ID3D11DepthStencilView> wideSceneDsv; hr(dev->CreateDepthStencilView(wideScene.Get(), &wdvd, &wideSceneDsv));
+        D3D11_TEXTURE2D_DESC wtd{};
+        wtd.Width = kWideW; wtd.Height = kWideH; wtd.MipLevels = wtd.ArraySize = 1;
+        wtd.Format = DXGI_FORMAT_R8G8B8A8_UNORM; wtd.SampleDesc.Count = 1;
+        wtd.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        ComPtr<ID3D11Texture2D> wideToy; hr(dev->CreateTexture2D(&wtd, nullptr, &wideToy));
+        ComPtr<ID3D11RenderTargetView> wideToyRtv; hr(dev->CreateRenderTargetView(wideToy.Get(), nullptr, &wideToyRtv));
+
+        g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
+        frame = (frame | 15u) + 1u; g_frame = frame;   // a sampled frame: the census copies every 16th
+        ctx->ClearDepthStencilView(wideSceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
+        const float light[4] = {0.6f, 0.6f, 0.6f, 1.0f}, black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        // kToyPsHlsl's own split is pos.x<4 regardless of viewport width,
+        // so the light stays exactly 4 px wide at the left edge here.
+        const float data[12] = {light[0], light[1], light[2], light[3], black[0], black[1], black[2], black[3], kNear5m, 0, 0, 0};
+        ctx->UpdateSubresource(cbuf.Get(), 0, nullptr, data, 0, 0);
+        const D3D11_VIEWPORT wideVp{0, 0, static_cast<float>(kWideW), static_cast<float>(kWideH), 0, 1};
+        ctx->RSSetViewports(1, &wideVp);
+        ctx->OMSetRenderTargets(1, wideToyRtv.GetAddressOf(), nullptr);
+        ctx->OMSetBlendState(blendSrcAlphaOne.Get(), nullptr, 0xFFFFFFFFu);
+        ctx->VSSetShader(toyVs.Get(), nullptr, 0);
+        ctx->PSSetShader(toyPs.Get(), nullptr, 0);
+        ctx->ClearRenderTargetView(wideToyRtv.Get(), kBlack);
+        ctx->Draw(3, 0);
+        // wideVp stays bound through the reissue: listedReissue()'s own
+        // draws take whatever viewport is currently set (it sets none of
+        // its own), so resetting to vp8 here would clip the capture to
+        // its first 8 columns, leaving every pixel past x=8 with no
+        // element depth at all.
+        g_holoEye = 0; g_holoW = kWideW; g_holoH = kWideH;
+        listedReissue();
+        check(uiDepthHologramResolve(ctx.Get(), 0, wideScene.Get(), kWideW, kWideH, nullptr),
+              "resolve runs (near-light radius)");
+        ID3D11ShaderResourceView* wideSrv = nullptr;
+        check(uiDepthTemporalDepth(kWideW, kWideH, 0, wideScene.Get(), &wideSrv), "near-light radius: private depth published");
+        ComPtr<ID3D11Resource> wideRes; wideSrv->GetResource(&wideRes);
+        auto wideValues = readDepth(dev.Get(), ctx.Get(), wideRes.Get());
+        check(std::fabs(wideValues[15] - kFillerDepth) < 1e-5f, "near-light radius: 12 px from light, in its block's neighbour, takes the filler depth");
+        check(wideValues[33] == 0.0f, "near-light radius: 30 px from light, two blocks further, is not covered");
+        check(wideValues[43] == 0.0f, "near-light radius: 40 px from light is not covered -- the round-6 regression case");
+        // The near-light census, live, right after the dispatch above:
+        // holoPollNearLightCounts (DONOTWAIT) should find this one sample
+        // once its copy has landed. The map itself only ever marks a block
+        // whose OWN pixels qualify as light -- block 1's covered status
+        // (the resolve's 3x3 lookaround) never writes back into the map --
+        // so only block 0 (the light's own block) is set, out of six.
+        g_holoNearLightSampleCount = 0;
+        const auto nearLightDeadline = GetTickCount64() + 2000;
+        while (g_holoNearLightSampleCount == 0 && GetTickCount64() < nearLightDeadline) holoPollNearLightCounts(ctx.Get());
+        check(g_holoNearLightSampleCount > 0, "near-light census: the wide panel's map copy resolved");
+        if (g_holoNearLightSampleCount) check(g_holoNearLightSamples[0] == 1, "near-light census: exactly 1 of 6 blocks was set");
+        ctx->RSSetViewports(1, &vp8);   // restore for every test after this one
+        g_holoEye = 0; g_holoW = 8; g_holoH = 8;
+    }
+
+    // The filler depth for a covered dark pixel. GREATER
+    // (holoElementDepthState) means it only lands where the private copy
+    // already holds something farther than the filler (~9.9 m here) --
+    // sky, or a real surface beyond it -- never overwriting a nearer real
+    // scene surface, exactly the pass-off behaviour over a hangar console
+    // 3.9 m behind a HUD panel's gaps (flight dumps 115012/115037).
+    {
+        // (a) A real scene surface behind the element but nearer than the
+        // filler (8 m behind a 5 m element, as the hangar's console at
+        // 3.9 m sat behind its 1.6 m text) keeps its own depth in the
+        // gaps, while the glyph half takes the element's own 5 m. The OLD
+        // rule (the gap writes the element's own depth) FAILS here: 5 m
+        // is nearer than 8 m, so GREATER would have let it through.
+        g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
+        const float scene8m = temporalPassDepthAt(8.0f);
+        ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, scene8m, 0);
+        const float glyph[4] = {0.6f, 0.6f, 0.6f, 1.0f}, gap[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        originalDraw(kNear5m, glyph, gap, blendSrcAlphaOne.Get(), false, kBlack, true);
+        listedReissue();
+        check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr),
+              "resolve runs (filler, nearer scene)");
+        {
+            auto values = privateDepth();
+            for (unsigned y = 0; y < 8; ++y) for (unsigned x = 0; x < 8; ++x) {
+                const bool glyphHalf = x < 4;
+                check(std::fabs(values[y * 8 + x] - (glyphHalf ? kNear5m : scene8m)) < 1e-5f,
+                      glyphHalf ? "(a) the glyph in front of an 8 m scene surface takes the element's own depth"
+                                : "(a) a dark gap over a nearer 8 m scene surface keeps the scene's depth");
+            }
+        }
+
+        // (b) and (c): the same element over sky (cleared 0, farther than
+        // both the filler and the element's own 5 m -- 30 m would do
+        // equally). Under the OLD rule (dark pixels write d, the element's
+        // own depth) this gap would read kNear5m (0.005), not the filler
+        // (~0.0025) -- (b) also FAILS if the PS still writes d for a
+        // covered dark pixel.
+        g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
+        ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
+        originalDraw(kNear5m, glyph, gap, blendSrcAlphaOne.Get(), false, kBlack, true);
+        listedReissue();
+        check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr),
+              "resolve runs (filler, over sky)");
+        {
+            auto values = privateDepth();
+            for (unsigned y = 0; y < 8; ++y) for (unsigned x = 0; x < 8; ++x) {
+                const bool glyphHalf = x < 4;
+                check(std::fabs(values[y * 8 + x] - (glyphHalf ? kNear5m : kFillerDepth)) < 1e-5f,
+                      glyphHalf ? "(c) a bright pixel in the same setup still takes the element's own depth"
+                                : "(b) a dark gap over sky, farther than the filler, takes the filler depth");
+            }
+        }
+    }
+
+    // Round 10: a UI-covered pixel discards before any other test,
+    // keeping whatever the private copy already held (its own exact
+    // depth from the UI depth pass) instead of this pass's own
+    // footprint -- the nearest listed draw, however transparent, which
+    // can supply none of the pixel's actual light. (a) A bright,
+    // UI-covered element at a nearer 0.6 m over a scene pre-seeded to a
+    // farther-looking 1.5 m stamp: GREATER alone would accept the
+    // element's write (0.6 m genuinely is nearer than 1.5 m), so only
+    // the mask discard keeps the stamp's own depth -- the FAILING case
+    // if the skip is removed. (b) The same draw with the mask bit
+    // clear takes the element's own depth, as before this round. (c) A
+    // dark gap next to UI-covered light still takes the filler: the
+    // near-light CS does not test UI coverage, so the glyph's own
+    // light still marks its block regardless of the glyph's own
+    // discard.
+    {
+        // A mask for these tests, built directly into g_mask rather
+        // than through maskFor (tied to the reissue system's own
+        // g_rebindW/H): this rig only needs g_mask[0] populated with a
+        // known pattern at the standard 8x8 size. Content is rewritten
+        // per sub-test below.
+        D3D11_TEXTURE2D_DESC md{};
+        md.Width = 8; md.Height = 8; md.MipLevels = md.ArraySize = 1;
+        md.Format = DXGI_FORMAT_R8_UNORM; md.SampleDesc.Count = 1;
+        md.Usage = D3D11_USAGE_DEFAULT; md.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        std::vector<unsigned char> maskBits(8 * 8, 1);
+        const D3D11_SUBRESOURCE_DATA msub{maskBits.data(), 8, 0};
+        ComPtr<ID3D11Texture2D> maskTex; hr(dev->CreateTexture2D(&md, &msub, &maskTex));
+        ComPtr<ID3D11ShaderResourceView> maskSrv; hr(dev->CreateShaderResourceView(maskTex.Get(), nullptr, &maskSrv));
+        g_mask[0].tex = maskTex.Get();
+        g_mask[0].srv = maskSrv.Get();
+        g_mask[0].w = 8; g_mask[0].h = 8;
+        g_mask[0].marked = true;
+
+        const float uiStamp = temporalPassDepthAt(1.5f);
+        const float elementDepth = temporalPassDepthAt(0.6f);
+        const float bright[4] = {0.6f, 0.6f, 0.6f, 1.0f};
+
+        // (a) Mask set everywhere: the nearer element never overwrites
+        // the farther-looking stamp already in the private copy.
+        g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
+        ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, uiStamp, 0);
+        originalDraw(elementDepth, bright, bright, blendSrcAlphaOne.Get(), false, kBlack, true);
+        listedReissue();
+        check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr),
+              "resolve runs (UI-covered mask)");
+        for (float v : privateDepth())
+            check(std::fabs(v - uiStamp) < 1e-5f,
+                  "(a) UI-covered: keeps the UI stamp's own depth, not the nearer element's");
+
+        // (b) The identical draw, mask bit cleared everywhere: back to
+        // today's behaviour, the element's own (nearer) depth wins.
+        for (auto& b : maskBits) b = 0;
+        ctx->UpdateSubresource(maskTex.Get(), 0, nullptr, maskBits.data(), 8, 0);
+        g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
+        ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, uiStamp, 0);
+        originalDraw(elementDepth, bright, bright, blendSrcAlphaOne.Get(), false, kBlack, true);
+        listedReissue();
+        check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr),
+              "resolve runs (mask bit clear)");
+        for (float v : privateDepth())
+            check(std::fabs(v - elementDepth) < 1e-5f,
+                  "(b) no mask bit: the element's own depth wins, as before this round");
+
+        // (c) glyph (x<4, bright) is UI-covered; gap (x>=4, dark) is
+        // not. The scene is sky (farther than everything here), so the
+        // filler write can land. The glyph's own discard must not stop
+        // its light from covering the gap in the near-light map.
+        for (unsigned y = 0; y < 8; ++y) for (unsigned x = 0; x < 4; ++x) maskBits[y * 8 + x] = 1;
+        ctx->UpdateSubresource(maskTex.Get(), 0, nullptr, maskBits.data(), 8, 0);
+        g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
+        ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
+        const float dark[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        originalDraw(kNear5m, bright, dark, blendSrcAlphaOne.Get(), false, kBlack, true);
+        listedReissue();
+        check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr),
+              "resolve runs (UI-covered glyph, gap not covered)");
+        {
+            auto values = privateDepth();
+            for (unsigned y = 0; y < 8; ++y) for (unsigned x = 0; x < 8; ++x) {
+                const float expected = x < 4 ? 0.0f : kFillerDepth;
+                check(std::fabs(values[y * 8 + x] - expected) < 1e-5f,
+                      x < 4 ? "(c) the UI-covered glyph itself keeps the sky it was pre-seeded with"
+                            : "(c) the gap next to UI-covered light still takes the filler");
+            }
+        }
+
+        g_mask[0] = Mask{};   // these raw pointers must not outlive the ComPtrs above
     }
 
     // The family builder covers the eleven built-ins (the holo panel, the
@@ -804,13 +1080,16 @@ int main() {
               "family builder: the world marker is not one of the cockpit families");
     }
 
-    // World markers, true depth: a broken game viewport (MinDepth ==
-    // MaxDepth == 0, mechanism i, flight 20260924_175113's own reading on
-    // the target reticle) is overridden for the element-depth pass alone,
-    // and the marker's real depth recovers; a VS that writes z=0 itself
-    // (mechanism ii) is not fixed by that override -- not covered, and its
-    // occlusion query reads zero samples, the signature the census reports
-    // as "element-depth samples p50 0".
+    // World markers, unlisted: kHoloUnlistedMarker never appears in
+    // g_holoMarkerDepthShaders (round 8), so both cases below still take
+    // the null PS, exactly as every world marker did before that table
+    // existed. A broken game viewport (MinDepth == MaxDepth == 0,
+    // mechanism i, flight 20260924_175113's own reading on the target
+    // reticle) is overridden for the element-depth pass alone, and the
+    // marker's real depth recovers from its own raster Z; a VS that
+    // writes z=0 itself (mechanism ii) is not fixed by that override --
+    // not covered, and its occlusion query reads zero samples, the
+    // signature the census reports as "element-depth samples p50 0".
     {
         g_holoWorldMarkerNoted = false;   // force a fresh one-time diagnostic line
         g_holoWindowMarkerDraws = 0;
@@ -821,7 +1100,7 @@ int main() {
         const D3D11_VIEWPORT brokenVp{0, 0, 8, 8, 0, 0};   // mechanism (i): MinDepth == MaxDepth == 0
         ctx->RSSetViewports(1, &brokenVp);
         g_holoIsWorldMarker = true;
-        g_holoDrawVs = kHoloWorldMarkerReticle;
+        g_holoDrawVs = kHoloUnlistedMarker;
         originalDraw(kNear50m, rgba, rgba, blendSrcAlphaOne.Get(), false, kBlack, true);
         listedReissue();
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr),
@@ -843,12 +1122,14 @@ int main() {
 
         // Mechanism (ii): the VS itself outputs z=0 (this rig's toy VS
         // takes z as a direct per-draw input, kToyVsHlsl), a normal
-        // viewport in place throughout. The override cannot fix this.
+        // viewport in place throughout. The override cannot fix this, and
+        // this hash has no matched PS either (the next test below covers
+        // the one hash that now does).
         g_holoMarkerSampleCount = 0;
         g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
         ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
         g_holoIsWorldMarker = true;
-        g_holoDrawVs = kHoloWorldMarkerReticle;
+        g_holoDrawVs = kHoloUnlistedMarker;
         originalDraw(0.0f, rgba, rgba, blendSrcAlphaOne.Get(), false, kBlack, true);
         listedReissue();
         check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr),
@@ -863,11 +1144,92 @@ int main() {
         g_holoIsWorldMarker = false;
     }
 
+    // World marker, true depth (round 8): the reticle's own VS
+    // (vs_71DD8B8B09060A81) forces z=0 but carries the real view
+    // distance in clip W. A toy VS with that exact output signature
+    // (TEXCOORD6 float4, TEXCOORD7 float3, SV_Position), z=0, clip W=50,
+    // exercises the matched PS end to end: it links against that
+    // signature, reads D3D11's own SV_Position.w in the pixel shader
+    // (proving it is the raw clip W, not 1/W -- the formula below only
+    // holds one of those two ways), and must stamp temporalPassDepthAt(50).
+    {
+        // x,y are pre-multiplied by clipW so the rasterizer's perspective
+        // divide (by w = clipW, not the usual 1) cancels back out to a
+        // full-screen triangle instead of shrinking toward the centre --
+        // unlike kToyVsHlsl above, this VS deliberately varies w.
+        auto markerVsCode = compile(
+            "cbuffer C : register(b0) { float clipW; float3 pad; };\n"
+            "void main(uint id : SV_VertexID, out float4 tc6 : TEXCOORD6,\n"
+            "          out float3 tc7 : TEXCOORD7, out float4 pos : SV_Position) {\n"
+            "    float2 uv = float2((id << 1) & 2, id & 2);\n"
+            "    tc6 = float4(0, 0, 0, 0); tc7 = float3(0, 0, 0);\n"
+            "    pos = float4((uv * 2.0 - 1.0) * clipW, 0.0, clipW);\n"
+            "}\n", "vs_5_0");
+        auto markerPsCode = compile(
+            "struct In { float4 tc6 : TEXCOORD6; float3 tc7 : TEXCOORD7; float4 pos : SV_Position; };\n"
+            "float4 main(In i) : SV_Target { return float4(0.5, 0.5, 0.5, 1.0); }\n", "ps_5_0");
+        ComPtr<ID3D11VertexShader> markerVs; ComPtr<ID3D11PixelShader> markerPs;
+        hr(dev->CreateVertexShader(markerVsCode->GetBufferPointer(), markerVsCode->GetBufferSize(), nullptr, &markerVs));
+        hr(dev->CreatePixelShader(markerPsCode->GetBufferPointer(), markerPsCode->GetBufferSize(), nullptr, &markerPs));
+        D3D11_BUFFER_DESC mbd{}; mbd.ByteWidth = 16; mbd.Usage = D3D11_USAGE_DEFAULT; mbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        ComPtr<ID3D11Buffer> markerCbuf; hr(dev->CreateBuffer(&mbd, nullptr, &markerCbuf));
+
+        g_holoMarkerSampleCount = 0;
+        g_uiDepth[0].frameBoundary(); g_uiDepth[1].frameBoundary();
+        ctx->ClearDepthStencilView(sceneDsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
+        const float clipW[4] = {50.0f, 0, 0, 0};
+        ctx->UpdateSubresource(markerCbuf.Get(), 0, nullptr, clipW, 0, 0);
+        ctx->VSSetShader(markerVs.Get(), nullptr, 0);
+        ctx->PSSetShader(markerPs.Get(), nullptr, 0);
+        ctx->VSSetConstantBuffers(0, 1, markerCbuf.GetAddressOf());
+        ctx->OMSetRenderTargets(1, toyRtvUnorm.GetAddressOf(), nullptr);
+        ctx->OMSetBlendState(blendSrcAlphaOne.Get(), nullptr, 0xFFFFFFFFu);
+        ctx->ClearRenderTargetView(toyRtvUnorm.Get(), kBlack);
+        ctx->Draw(3, 0);
+        g_holoEye = 0; g_holoW = 8; g_holoH = 8;
+        g_holoIsWorldMarker = true;
+        g_holoDrawVs = kHoloWorldMarkerReticle;
+        listedReissue();
+        ctx->VSSetShader(toyVs.Get(), nullptr, 0);   // restore for every test after this one
+        ctx->PSSetShader(toyPs.Get(), nullptr, 0);
+        ctx->VSSetConstantBuffers(0, 1, cbuf.GetAddressOf());
+        ctx->PSSetConstantBuffers(0, 1, cbuf.GetAddressOf());
+
+        check(uiDepthHologramResolve(ctx.Get(), 0, sceneTex.Get(), 8, 8, nullptr),
+              "resolve runs (world marker, true depth)");
+        for (float v : privateDepth())
+            check(std::fabs(v - kNear50m) < 1e-5f,
+                  "world marker: the listed reticle's own PS recovers its real depth from clip W");
+        for (int tries = 0; tries < 50 && g_holoMarkerSampleCount == 0; ++tries) {
+            holoPollQueries(ctx.Get());
+            if (!g_holoMarkerSampleCount) Sleep(1);
+        }
+        check(g_holoMarkerSampleCount > 0 && g_holoMarkerSamples[g_holoMarkerSampleCount - 1] > 0,
+              "world marker: the matched PS's occlusion query sees the recovered geometry");
+        g_holoIsWorldMarker = false;
+    }
+
     // The periodic census prints while the key is on, once the window's
     // 30 s (wall clock) elapses -- forced by backdating the window's
     // start rather than waiting -- and prints nothing while it is off
     // (covered above, before any scratch existed).
     {
+        // Every resolve above queued a near-light staging copy (not just
+        // the world-marker draws, unlike the occlusion-query ring), and
+        // the ring only holds 3 slots per eye, so several are still
+        // pending from the world-marker tests just above. Drain them
+        // first -- holoDepthWindowTick polls the same ring itself, and an
+        // unpolled straggler landing during that call would make the
+        // "zero near-light blocks" line below false.
+        {
+            const auto deadline = GetTickCount64() + 2000;
+            uint32_t stableRounds = 0;
+            while (stableRounds < 3 && GetTickCount64() < deadline) {
+                const uint32_t before = g_holoNearLightSampleCount;
+                holoPollNearLightCounts(ctx.Get());
+                stableRounds = (g_holoNearLightSampleCount == before) ? stableRounds + 1 : 0;
+            }
+        }
         g_holoWindowStartMs = GetTickCount64() - 30001;
         g_holoWindowListed = g_holoWindowResolved = 0;
         g_holoWindowNoTarget = g_holoWindowFloorFallback = 0;
@@ -876,6 +1238,7 @@ int main() {
         g_holoPixelSampleCount = 0;
         g_holoWindowMarkerDraws = 0;
         g_holoMarkerSampleCount = 0;
+        g_holoNearLightSampleCount = 0;
         g_lastLog.clear();
         holoDepthWindowTick(ctx.Get());
         check(g_lastLog.find("hologram depth:") != std::string::npos, "census: the line printed");
@@ -886,6 +1249,8 @@ int main() {
         check(g_lastLog.find("world markers 0.00 draws/frame") != std::string::npos, "census: zero world-marker draws printed");
         check(g_lastLog.find("element-depth samples p50 0 (occlusion, 0 sampled)") != std::string::npos,
               "census: zero world-marker samples printed");
+        check(g_lastLog.find("near-light blocks/eye-frame mean 0.0 (0 sampled)") != std::string::npos,
+              "census: zero near-light blocks printed");
         check(g_holoWindowStartMs != 0, "census: the window reset after printing");
     }
 

@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "../common/config.h"
+#include "../common/runtime_profile.h"
 #include "../common/guard.h"
 #include "../common/log.h"
 #include <string>
@@ -19,6 +20,7 @@
 #include "flare_vs.h"
 #include "particle_vs.h"
 #include "shader_swap.h"
+#include "stretched_vs.h"
 
 namespace edvr {
 
@@ -55,6 +57,11 @@ constexpr uint64_t kPlumeVs = 0xEB787F983BC1F5A3ull;
 // behind it cannot be substituted at all, so each signature group needs
 // its own transcription and its own entry here.
 constexpr uint64_t kFlareVs = 0x6041FD2D3D0164E1ull;
+
+// The STRETCHED, age-ramped particle billboard (vh=68DDDEF04D9894AF,
+// docs/shaders/particle-stretched-vs.asm). Direct cb1[277]/cb1[278] basis
+// consumption rather than runtime cross products.
+constexpr uint64_t kStretchedVs = 0x68DDDEF04D9894AFull;
 
 // ONE HASH PER TRANSCRIPTION. NEVER A SECOND ONE ON A LIKENESS.
 //
@@ -104,22 +111,27 @@ struct BillboardVariant {
     const char* name;      // names the compile in the log
 };
 
-constexpr int kVariantCount = 2;
+constexpr int kVariantCount = 3;
 const BillboardVariant kVariants[kVariantCount] = {
     {kPlumeVs, kParticleWorldVS, sizeof(kParticleWorldVS) - 1,
      "particle_vs"},
     {kFlareVs, kFlareWorldVS, sizeof(kFlareWorldVS) - 1,
      "flare_vs"},
+    {kStretchedVs, kParticleStretchedWorldVS, sizeof(kParticleStretchedWorldVS) - 1,
+     "stretched_vs"},
 };
 // The draw path's inline prefilter (particleOnDrawMayMatch, particle_fix.h)
 // compares against its own copy of these hashes; a variant added here and
 // not there would be silently never offered, so the two lists must agree.
-static_assert(kVariantCount == 2 && detail::kParticleVariantVs[0] == kPlumeVs &&
-                  detail::kParticleVariantVs[1] == kFlareVs,
+static_assert(kVariantCount == 3 && detail::kParticleVariantVs[0] == kPlumeVs &&
+                  detail::kParticleVariantVs[1] == kFlareVs &&
+                  detail::kParticleVariantVs[2] == kStretchedVs,
               "particle_fix.h's kParticleVariantVs must list kVariants' hashes in order");
 
 const char* variantLabel(int v) {
-    return (v == 1) ? "solar flare" : "smoke plume";
+    if (v == 1) return "solar flare";
+    if (v == 2) return "stretched particle";
+    return "smoke plume";
 }
 
 // cb1 is 280 registers. The basis vectors live at 278 and 279 -- floats
@@ -631,13 +643,14 @@ void particleEnd(ID3D11DeviceContext* ctx) {
         Log::get().note(
             "particle billboard: steady -- %llu draw(s) in the last ten "
             "seconds through the replacement shader (%llu smoke plume, "
-            "%llu solar flare), %llu of them with a solved viewer at "
+            "%llu solar flare, %llu stretched particle), %llu of them with a solved viewer at "
             "(%.1f %.1f %.1f). Each quad now faces the viewer instead of "
-            "the view axis. A zero in one of the two is not a fault -- it "
+            "the view axis. A zero in one of the three is not a fault -- it "
             "means you were nowhere near that effect.",
             static_cast<unsigned long long>(g_applied - g_appliedAtNote),
             static_cast<unsigned long long>(g_appliedBy[0]),
             static_cast<unsigned long long>(g_appliedBy[1]),
+            static_cast<unsigned long long>(g_appliedBy[2]),
             static_cast<unsigned long long>(g_facingUsed),
             g_lastFacing[0], g_lastFacing[1], g_lastFacing[2]);
         g_noteMs = now;
@@ -651,7 +664,8 @@ void particleConfigure(Config& cfg) {
     // The witchspace starfield switch. "on" is the game's own behaviour and
     // the default; "off" empties the jump tunnel, which a player asked for
     // after 0.12.3 did it by accident.
-    const std::string ws = cfg.getString("fix.witchspace_stars", "on");
+    const std::string ws = runtimeVrProfile() ?
+        cfg.getString("fix.witchspace_stars", "on") : "on";
     const bool wasHidden = g_hideWitchspaceStars;
     if (ws == "off") {
         g_hideWitchspaceStars = true;
@@ -675,7 +689,8 @@ void particleConfigure(Config& cfg) {
     }
 
     const Mode wasMode = detail::g_particleMode;
-    const std::string m = cfg.getString("fix.particle_billboard", "steady");
+    const std::string m = runtimeVrProfile() ?
+        cfg.getString("fix.particle_billboard", "steady") : "stock";
     if (m == "steady") {
         detail::g_particleMode = Mode::kSteady;
     } else {
