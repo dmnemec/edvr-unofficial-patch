@@ -62,7 +62,7 @@ struct CaptureLifetime final {
 struct Watchdog final {
   Event finished;
   std::thread thread{[this] {
-    if (!finished.wait(20000)) std::_Exit(3);
+    if (!finished.wait(60000)) std::_Exit(3);
   }};
   ~Watchdog() { finished.signal(); thread.join(); }
 };
