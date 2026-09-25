@@ -45,6 +45,7 @@
 #include "perf_monitor.h"
 #include "shader_swap.h"
 #include "gpu_timing.h"
+#include "gpu_census.h"   // issue #38: the per-feature GPU cost census
 #include "temporal_shader_bytecode.h"
 
 namespace edvr {
@@ -1133,6 +1134,8 @@ double   g_camHeadDiffSum = 0.0;    // degrees: the camera's delta against the h
 double   g_camMoveSum = 0.0;        // metres: the camera's displacement a frame
 uint32_t g_camFrames = 0;
 uint32_t g_camDropRot = 0;          // frames whose camera delta was another camera's
+uint32_t g_camDropParked = 0;       // ...a parked camera's: from rows a drop left, not turned at all
+uint32_t g_camParkedStayMax = 0;    // ...the longest run of such frames, in frames
 uint32_t g_camDropMove = 0;         // frames whose camera translation was a jump
 // The world path's scene floor (kTemporalSceneDrawFloor; the split's gate
 // says why): eye-frames it alone stood the path down, and the last count
@@ -2525,9 +2528,10 @@ uint32_t    g_chooseNone = 0;        // ...no write this frame at all
 bool        g_chosenThisFrame = false;
 int         g_latchSlotVs = -1;      // where the bound block was found, for the log
 int         g_latchSlotPs = -1;
-float       g_lastGoodC[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};   // the last accepted ship delta
-float       g_lastGoodTv[3] = {};                            // ...and its translation term
-bool        g_lastGoodValid = false;
+// The world path's gate on the rows' delta (temporal_math.h): the last
+// accepted delta, and whether the rows a frame measures from are the view's
+// own. Both eyes judge a frame; it moves on at the frame boundary.
+TemporalCameraGate g_cameraGate;
 uint32_t    g_camCarried = 0;        // frames the ship's delta was carried over a drop
 uint32_t    g_camCarriedJump = 0;    // ...of which carried a translation over 50 m: zero by construction
 float    g_curRows[12] = {};
@@ -3517,9 +3521,11 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
             // this eye's finished, tonemapped colour, for the resolve's
             // FLOOR test only -- its share test reads the game's own HDR
             // render target back separately (never this).
+            gpuCensusBegin(ctx, GpuCensusSection::DoorHologramResolve);
             uiDepthHologramResolve(ctx, eye, scene, sd.Width, sd.Height, inSrv);
             uiDepthTemporalDepth(sd.Width, sd.Height, eye, scene, &uiDepthSrv);
             celestialMotionViews(ctx, scene, terrainSrvs);
+            gpuCensusEnd(ctx, GpuCensusSection::DoorHologramResolve);
             uiDepthHoloMotion(eye,scene,holoSrvs);
             engineViewsGiven = engineVelocityViews(ctx, eye, scene, &engineViews);
             engineHeldSrv[0].Attach(engineViews.slots);
@@ -3632,39 +3638,10 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
         float worldDelta[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         bool worldValid = false;
         const uint32_t sceneDraws = depthProbeSceneDraws();
-        auto worldFromRows = [](const float prev[12], const float now[12],
-                                float W[9], float tv[3], float camMove[3]) {
-            float Rp[9], Rn[9], RpT[9];
-            temporalRot3Of34(prev, Rp);
-            temporalRot3Of34(now, Rn);
-            temporalTranspose3(Rp, RpT);
-            const float colP[3] = {prev[3], prev[7], prev[11]};
-            const float colN[3] = {now[3], now[7], now[11]};
-            temporalMul3(RpT, Rn, W);
-            const float dc[3] = {colN[0] - colP[0], colN[1] - colP[1], colN[2] - colP[2]};
-            temporalApply3(RpT, dc, tv);
-            for (int i = 0; i < 3; ++i) camMove[i] = dc[i];
-            // The game's view space runs z forward (DirectX), the runtime's
-            // eye space z back. A rotation read in the one and applied in
-            // the other has its pitch and yaw reversed and its roll kept,
-            // which is exactly what the regression measured: over a dozen
-            // intervals in space the rows turned -1 times the head about x
-            // and y and +1 about z (k = -2, -2, 0; 2026-09-04), and the far
-            // plane, on this delta alone, moved the wrong way by the head's
-            // whole turn -- the sky's smear, and the station's under a head
-            // turn, both gone with the world path off. Conjugating by the
-            // z flip carries the delta into the eye's frame; the translation
-            // term takes the same flip (a reflection, not a half turn: the
-            // still-ship regression on the third line says which).
-            W[2] = -W[2];
-            W[5] = -W[5];
-            W[6] = -W[6];
-            W[7] = -W[7];
-            tv[2] = -tv[2];
-        };
         if (candValid[2]) {
+            // The delta and its z flip: temporalWorldFromRows (temporal_math.h).
             float camMove[3];
-            worldFromRows(g_prevRows, g_curRows, worldDelta, tvCam, camMove);
+            temporalWorldFromRows(g_prevRows, g_curRows, worldDelta, tvCam, camMove);
             memcpy(cand[2], worldDelta, sizeof(worldDelta));
             worldValid = true;
             const double move = sqrt(static_cast<double>(camMove[0]) * camMove[0] +
@@ -3733,52 +3710,39 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                 g_rowsFollowNoted = false;
                 Log::get().note("temporal aa: scene camera accepted -- the world path is back.");
             }
-            // Plausibility, per frame: the rows' delta is the head's plus the
-            // ship's turn, and no ship turns 270 degrees a second; a delta
-            // beyond 3 degrees from the head's is another camera's rows or
-            // a stale latch, and last frame's accepted delta is carried in
-            // its place (a far better guess than the head alone, which
-            // smeared the world on every dropped frame). A jump over 50 m
-            // is the floating origin moving: only the translation is dropped.
-            // The jump is dropped BEFORE the last-good store, so a jump never
-            // becomes the translation a later dropped frame carries: stored
-            // first, a jump of hundreds of metres to tens of kilometres was
-            // carried into the next dropped frame and moved every pixel with
-            // a depth on the world path by it for one frame (the review of
-            // 2026-09-04, F3). A jump frame keeps the last plausible
-            // translation as its last-good, and a carried figure over 50 m is
-            // counted so the invariant has a witness on the line.
-            const bool jump = move >= 50.0;
-            if (jump) {
-                for (int i = 0; i < 3; ++i) tvCam[i] = 0.0f;
+            // Plausibility, per frame (temporalCameraGateStep): a delta over
+            // 3 degrees from the head's is another camera's and the last
+            // accepted one is carried in its place; a jump over 50 m drops
+            // only the translation, before the last-good store (F3,
+            // 2026-09-04); and a delta that does not turn at all, measured
+            // from rows a drop left behind, is a parked camera's and is
+            // carried over too -- eye run 050423 took one as the view's and
+            // carried its zero into the next frame (2026-09-25). A jump frame
+            // keeps the last plausible translation as its last-good, and a
+            // carried figure over 50 m is counted so the invariant has a
+            // witness on the line.
+            const TemporalCameraStep step = temporalCameraGateStep(
+                g_cameraGate, g_prevRows, g_curRows, move, diffDeg, worldDelta, tvCam);
+            if (step.jump) {
                 ++g_camDropMove;
                 // The jump's frame, for the eye run's trace and the
                 // submission history (each eye runs this on the same frame).
                 g_originJumpFrame = g_rowsFrame;
             }
-            if (diffDeg > 3.0f) {
-                ++g_camDropRot;
-                if (g_lastGoodValid) {
-                    memcpy(worldDelta, g_lastGoodC, sizeof(worldDelta));
-                    memcpy(tvCam, g_lastGoodTv, sizeof(tvCam));
-                    memcpy(cand[2], worldDelta, sizeof(worldDelta));
-                    ++g_camCarried;
-                    const double carried = sqrt(static_cast<double>(tvCam[0]) * tvCam[0] +
-                                                static_cast<double>(tvCam[1]) * tvCam[1] +
-                                                static_cast<double>(tvCam[2]) * tvCam[2]);
-                    if (carried >= 50.0) ++g_camCarriedJump;
-                } else {
-                    candValid[2] = false;
-                    worldValid = false;
-                }
-            } else {
-                memcpy(g_lastGoodC, worldDelta, sizeof(g_lastGoodC));
-                if (!jump) memcpy(g_lastGoodTv, tvCam, sizeof(g_lastGoodTv));
-                g_lastGoodValid = true;
+            if (step.verdict == TemporalCameraVerdict::Another) ++g_camDropRot;
+            if (step.verdict == TemporalCameraVerdict::Parked) ++g_camDropParked;
+            if (step.carried) {
+                memcpy(cand[2], worldDelta, sizeof(worldDelta));
+                ++g_camCarried;
+                if (step.carriedJump) ++g_camCarriedJump;
+            }
+            if (!step.valid) {
+                candValid[2] = false;
+                worldValid = false;
             }
             // Whether this frame's rows are the view's own: the world path
             // did not carry last frame's delta in their place.
-            g_rowsDeltaOwn = diffDeg <= 3.0f;
+            g_rowsDeltaOwn = step.verdict == TemporalCameraVerdict::Own;
         }
 
         PassParams p{};
@@ -4906,9 +4870,11 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                     ctx->CSSetUnorderedAccessViews(0, traceReady ? 8 : 7, uavsM, nullptr);
                     ctx->CSSetConstantBuffers(0, engineBound ? 3 : 1, cbM);
                     ctx->CSSetSamplers(0, 1, &smpM);
+                    gpuCensusBegin(ctx, GpuCensusSection::DoorMotionPrep);
                     beginPart(qs, PrepPart::Mv, dev, ctx);
                     ctx->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
                     endPart(qs, PrepPart::Mv, ctx);
+                    gpuCensusEnd(ctx, GpuCensusSection::DoorMotionPrep);
                     if (engineBound) {
                         ctx->CSSetConstantBuffers(1, 2, savedCbM);
                         for (auto* b : savedCbM) if (b) b->Release();
@@ -4991,7 +4957,8 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                         // starts afresh after.
                         usedDlaa = true;
                         e.dlHaveHistory = false;
-                    } else if ((beginRegion(qs, Region::Full, dev, ctx),
+                    } else if ((gpuCensusBegin(ctx, GpuCensusSection::DoorUpscaler),
+                                beginRegion(qs, Region::Full, dev, ctx),
                                 amdEngine
                                     ? edvr::fsr3Evaluate(ctx, static_cast<unsigned>(eye),
                                                         e.dlColour,
@@ -5003,6 +4970,7 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                                                   biasMask, w, h,
                                                   oW, oH, jxNow, jyNow, resetHist, frameMs, &why))) {
                         endRegion(qs, Region::Full, ctx);
+                        gpuCensusEnd(ctx, GpuCensusSection::DoorUpscaler);
                         usedDlaa = true;
                         e.dlHaveHistory = true;
                         if (amdEngine) {
@@ -5085,6 +5053,7 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                         }
                     } else {
                         endRegion(qs, Region::Full, ctx);
+                        gpuCensusEnd(ctx, GpuCensusSection::DoorUpscaler);
                         e.dlHaveHistory = false;
                         if (!engineFailNoted) {
                             engineFailNoted = true;
@@ -5133,7 +5102,12 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                     // old `else` branch used to run, so the copy-through below
                     // is unchanged. (Main's corona hold, b1's second float and
                     // its once-only note, lives inside the helper.)
-                    if (usedDlaa && !applyUiResolve(e.dlOutSrv, true)) ctx->CopyResource(e.dlSubmit, e.dlOut);
+                    if (usedDlaa) {
+                        gpuCensusBegin(ctx, GpuCensusSection::DoorUiResolve);
+                        const bool uiResolvedHere = applyUiResolve(e.dlOutSrv, true);
+                        gpuCensusEnd(ctx, GpuCensusSection::DoorUiResolve);
+                        if (!uiResolvedHere) ctx->CopyResource(e.dlSubmit, e.dlOut);
+                    }
                     // luma probe stage 1, dlss_out: e.dlSubmit already holds it
                     // here on every usedDlaa path, UI-resolved or copied
                     // straight from e.dlOut above.
@@ -5402,9 +5376,11 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                     ctx->CSSetUnorderedAccessViews(0, 8, uavsM, nullptr);
                     ctx->CSSetConstantBuffers(0, engineOwn ? 3 : 1, cbM);
                     ctx->CSSetSamplers(0, 1, &smpM);
+                    gpuCensusBegin(ctx, GpuCensusSection::DoorMotionPrep);
                     beginPart(qs, PrepPart::Mv, dev, ctx);
                     ctx->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
                     endPart(qs, PrepPart::Mv, ctx);
+                    gpuCensusEnd(ctx, GpuCensusSection::DoorMotionPrep);
                     if (engineOwn) {
                         ctx->CSSetConstantBuffers(1, 2, savedCbM);
                         for (auto* b : savedCbM) if (b) b->Release();
@@ -5489,12 +5465,14 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                             const float sy = static_cast<float>(rh) / static_cast<float>(h);
                             const bool resetP = (flags & 1u) != 0 || !e.prHaveHistory;
                             // "periphery": the steady periphery's own NGX role.
+                            gpuCensusBegin(ctx, GpuCensusSection::DoorUpscaler);
                             beginRegion(qs, Region::Periphery, dev, ctx);
                             periphOk = dlaaEvaluatePeriphery(
                                 ctx, eye, reduce ? e.prColour : e.dlColour,
                                 reduce ? e.prDepth : e.dlDepth, reduce ? e.prMv : e.dlMv, e.prOut,
                                 rw, rh, jxNow * sx, jyNow * sy, resetP, frameMs, &whyF);
                             endRegion(qs, Region::Periphery, ctx);
+                            gpuCensusEnd(ctx, GpuCensusSection::DoorUpscaler);
                             if (!periphOk) standDown(whyF);
                         }
                     }
@@ -5508,11 +5486,13 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                         // reads e.dlMvLead, and e.dlMv is untouched either way.
                         ID3D11Texture2D* cropMv = e.dlMvLead ? e.dlMvLead : e.dlMv;
                         // "centre": the fovea crop's own NGX role.
-                        if ((beginRegion(qs, Region::Centre, dev, ctx),
+                        if ((gpuCensusBegin(ctx, GpuCensusSection::DoorUpscaler),
+                             beginRegion(qs, Region::Centre, dev, ctx),
                              dlssEvaluateFovea(ctx, eye, e.dlColour, e.dlDepth, cropMv, e.dlOut, w, h,
                                               foW, foH, fcx, fcy, fcw, fch, focx, focy, focw, foch,
                                               jxNow, jyNow, resetHist, frameMs, &whyF))) {
                             endRegion(qs, Region::Centre, ctx);
+                            gpuCensusEnd(ctx, GpuCensusSection::DoorUpscaler);
                             foveaEvalOk = true;   // e.foveaHaveHistory is set from this at frame end
                             // The head lead's carry: the base NVIDIA's crop
                             // history now belongs to, the size it ran at, and
@@ -5530,6 +5510,7 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                             }
                         } else {
                             endRegion(qs, Region::Centre, ctx);
+                            gpuCensusEnd(ctx, GpuCensusSection::DoorUpscaler);
                             standDown(whyF);
                         }
                     }
@@ -5751,7 +5732,10 @@ void* temporalInner(void* srcTex, int eye, const float* bounds,
                 // compose already blended NVIDIA's crop into the composite,
                 // so the resolve reads the FINISHED frame here, not the bare
                 // crop.
-                if (applyUiResolve(e.foveaOutSrv, false)) {
+                gpuCensusBegin(ctx, GpuCensusSection::DoorUiResolve);
+                const bool foveaUiResolved = applyUiResolve(e.foveaOutSrv, false);
+                gpuCensusEnd(ctx, GpuCensusSection::DoorUiResolve);
+                if (foveaUiResolved) {
                     foveaSubmit = e.dlSubmit;
                     foveaUiTreatment = "the UI resolve (from the current raster alone: the UI history stays the periphery's)";
                 } else {
@@ -6762,6 +6746,10 @@ void temporalPassFrameBoundary() {
     g_rowsObservedWrites = 0;
     g_rowsObservedEvictions = 0;
     g_chosenThisFrame = false;
+    // This frame's rows become the next frame's reference, the view's own
+    // only when a delta to them was measured and neither eye refused it.
+    temporalCameraGateAdvance(g_cameraGate, g_curValid);
+    if (g_cameraGate.parkedRun > g_camParkedStayMax) g_camParkedStayMax = g_cameraGate.parkedRun;
     if (g_curValid) {
         if (g_prevValid) ++g_camPairs;
         memcpy(g_prevRows, g_curRows, sizeof(g_prevRows));
@@ -6906,12 +6894,14 @@ bool temporalPassRegistration(char* buf, size_t n, char* buf2, size_t n2, char* 
     buf = buf2;
     n = buf2 ? n2 : 0;
     used = 0;
-    if (g_camDropRot || g_camDropMove) {
+    if (g_camDropRot || g_camDropParked || g_camDropMove) {
         regAppend(buf, n, used,
                   "; the camera's delta was dropped on %u eye-frames as another camera's (over 3 "
-                  "deg from the head's) and its translation on %u as a jump (over 50 m); a "
-                  "jump was carried on %u (zero by construction)",
-                  g_camDropRot, g_camDropMove, g_camCarriedJump);
+                  "deg from the head's), on %u as a parked camera's (not turned at all, from "
+                  "rows a drop had left; the longest stay %u frames) and its translation on %u "
+                  "as a jump (over 50 m); a jump was carried on %u (zero by construction)",
+                  g_camDropRot, g_camDropParked, g_camParkedStayMax, g_camDropMove,
+                  g_camCarriedJump);
     }
     if (g_worldFloorRefused) {
         regAppend(buf, n, used,
@@ -7036,6 +7026,8 @@ bool temporalPassRegistration(char* buf, size_t n, char* buf2, size_t n2, char* 
     g_camMoveSum = 0.0;
     g_camFrames = 0;
     g_camDropRot = 0;
+    g_camDropParked = 0;
+    g_camParkedStayMax = 0;
     g_camDropMove = 0;
     g_worldFloorRefused = 0;
     g_rowsWritesSum = 0;
@@ -7289,12 +7281,31 @@ extern "C" __declspec(dllexport) void* edvrTemporalAa(
     unsigned outW, unsigned outH, unsigned flags) {
     if (!srcTex || eye < 0 || eye > 1 || !tanNow || edvr::deviceHookRecoveryDisabled()) return nullptr;
     void* out = nullptr;
+    // The door census's whole-pass span (gpu_census.h): timed at this outer
+    // boundary, not inside temporalInner -- that function has many early
+    // returns, and an outer Begin/End closes correctly no matter which one
+    // it takes. ctx is derived the same way temporalInner derives its own
+    // (2281's idiom: get the device, get its context, release the device
+    // immediately, keep the context for the call).
+    ID3D11DeviceContext* censusCtx = nullptr;
+    ID3D11Texture2D* censusTex = nullptr;
+    static_cast<IUnknown*>(srcTex)->QueryInterface(__uuidof(ID3D11Texture2D),
+                                                    reinterpret_cast<void**>(&censusTex));
+    if (censusTex) {
+        ID3D11Device* censusDev = nullptr;
+        censusTex->GetDevice(&censusDev);
+        if (censusDev) { censusDev->GetImmediateContext(&censusCtx); censusDev->Release(); }
+        censusTex->Release();
+    }
+    edvr::gpuCensusBegin(censusCtx, edvr::GpuCensusSection::DoorTemporalWhole);
     edvr::guardedBudget(edvr::g_budget, [&] {
         out = edvr::temporalInner(srcTex, eye, bounds, tanNow, tanPrev, jxNow,
                                   jyNow, deltaHead, headTrans, headTransSwapped,
                                   nearZ, farZ, headDeg, motion, blend,
                                   clampSigma, outW, outH, flags);
     });
+    edvr::gpuCensusEnd(censusCtx, edvr::GpuCensusSection::DoorTemporalWhole);
+    if (censusCtx) censusCtx->Release();
     return out;
 }
 

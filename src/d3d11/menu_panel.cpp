@@ -25,6 +25,7 @@
 #include "perf_monitor.h"   // the upload is an event for the drop attribution
 #include "shader_swap.h"
 #include "gpu_timing.h"
+#include "gpu_census.h"   // issue #38: the per-feature GPU cost census
 
 namespace edvr {
 namespace {
@@ -431,11 +432,11 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
         left.rect = {pad, y, split, y + rowPitch};
         left.align = DT_LEFT;
         left.font = l.style == kMenuHeading ? Font::Small : l.style == kMenuNote ? Font::Hint : Font::Row;
-        left.rgb = l.style == kMenuHeading ? kHeading
-                   : l.style == kMenuDim   ? kDimText
-                   : l.style == kMenuNote  ? kHint
-                   : c.toast               ? kToastText
-                                           : kLabel;
+        left.rgb = l.style == kMenuHeading        ? kHeading
+                   : l.style == kMenuDim || l.dim ? kDimText
+                   : l.style == kMenuNote         ? kHint
+                   : c.toast                      ? kToastText
+                                                   : kLabel;
         if (l.style == kMenuHeading) left.rect.left = pad / 2;
         if (c.toast) left.rect.right = cardW - pad;
         ops.push_back(left);
@@ -488,10 +489,10 @@ void layout(const MenuContent& c, std::vector<Op>& ops, std::vector<LineRect>& l
             right.rect = {split, y, cardW - pad, y + rowPitch};
             right.align = l.style == kMenuInfo ? DT_LEFT : DT_RIGHT;
             right.font = Font::Row;
-            right.rgb = l.style == kMenuInfo ? kLabel
-                        : l.style == kMenuDim ? kDimText
-                        : l.badge == kBadgePending ? kBadge
-                                                   : kValue;
+            right.rgb = l.style == kMenuInfo               ? kLabel
+                        : l.style == kMenuDim || l.dim      ? kDimText
+                        : l.badge == kBadgePending          ? kBadge
+                                                             : kValue;
             if (l.style == kMenuRowEdit) right.rect.right -= cap / 3;
             if (l.toggle) right.rect.right -= switchW + cap / 2;
             ops.push_back(right);
@@ -1416,8 +1417,10 @@ void* compositeInner(void* srcTex, int eye, const float* bounds, const float* xf
             ctx->CSSetSamplers(0, 1, &g_samp);
             ctx->CSSetShaderResources(0, 2, setSrv);
             ctx->CSSetUnorderedAccessViews(0, 1, &e.outUav, nullptr);
+            gpuCensusBegin(ctx, GpuCensusSection::DoorMenu);
             ctx->Dispatch((static_cast<UINT>(box[2] - box[0]) + 7) / 8,
                           (static_cast<UINT>(box[3] - box[1]) + 7) / 8, 1);
+            gpuCensusEnd(ctx, GpuCensusSection::DoorMenu);
             if (qs >= 0) g_qring[qs].timer.end(ctx); // Poll consumes failed End samples too.
 
             ctx->CSSetShaderResources(0, 2, nullSrv);
