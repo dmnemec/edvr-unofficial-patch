@@ -16,8 +16,11 @@ but `native_runtime_host.h:1798`'s `graphics` field is declared
 `NativeGraphicsClient` is unrelated to this arc; do not cite it again. See
 `## Design` for the corrected mechanism, a real, not-yet-confirmed puzzle
 in it (`systemD3D11CreateDevice()` appears to already leak a permanent
-reference to the same module this code frees), and the proposed fix. No
-code has been changed yet.
+reference to the same module this code frees), and the proposed fix.
+Implemented 2026-09-24: `NativeDevice::reset()` in `src\openxr\native_device.h`
+now sets `systemModule_ = nullptr` without calling `FreeLibrary()`, ensuring
+System32's `d3d11.dll` remains mapped for process lifetime to protect late calls
+from chained hooks (EDHM, Steam overlay).
 
 Hypothesis, as corrected in `## Design`: `host_graphics_reset`
 (`src\openxr\native_runtime_host.h:1797-1798`) calls `NativeDevice::reset()`
