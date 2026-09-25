@@ -80,6 +80,8 @@ constexpr int kDefaultSegments = 64;
 extern bool  g_panelCurveStoodDown;
 extern float g_panelCurveCurvature;
 extern int   g_panelCurveSegments;
+extern bool  g_panelCurveSbs3D;
+extern bool  g_panelCurveSbsSwap;
 }  // namespace detail
 // __forceinline, not inline: beginPanelOverride is large enough that MSVC's
 // inliner declined this one and called an out-of-line copy per eye draw
@@ -90,20 +92,26 @@ __forceinline bool panelCurveWants() {
     // Curvature 0 at the default segment count is the shipped state and does
     // nothing at all. A non-default segment count at curvature 0 is the
     // deliberate identity test, which has to substitute in order to prove
-    // anything -- so it counts as wanting.
+    // anything -- so it counts as wanting. SBS 3D substitutes the quad
+    // regardless of curvature to map per-eye half-frame UVs.
     return detail::g_panelCurveCurvature > 0.0f ||
-           detail::g_panelCurveSegments != detail::kDefaultSegments;
+           detail::g_panelCurveSegments != detail::kDefaultSegments ||
+           detail::g_panelCurveSbs3D;
 }
 
-// Replace one recognised composite draw with the bent strip: save the input
+// Replace one recognised composite draw with the bent/SBS strip: save the input
 // assembler state actually touched, bind ours, issue the equivalent draw,
 // put the saved state back.
+// eye: 0 for left eye, 1 for right eye, or -1 to auto-detect by arrival parity.
 //
 // Returns whether the game's own draw must now be SWALLOWED. False means
 // nothing was substituted and the caller must forward the draw as usual --
 // which is the honest answer when the buffers could not be built, and is why
 // a failure here is a flat screen rather than a missing one.
-bool panelCurveSubstitute(ID3D11DeviceContext* ctx, PanelCurveDrawFn draw);
+bool panelCurveSubstitute(ID3D11DeviceContext* ctx, PanelCurveDrawFn draw, int eye = -1);
+
+// Resets per-frame eye tracking counters.
+void panelCurveFrameBoundary();
 
 // Releases the grid buffers. From the vScreen shutdown, which is the only
 // place that knows the device is still alive.

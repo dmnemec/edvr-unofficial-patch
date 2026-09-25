@@ -1,4 +1,4 @@
-﻿#include "panel_curve.h"
+#include "panel_curve.h"
 
 #include <windows.h>
 
@@ -25,6 +25,8 @@ namespace detail {
 bool  g_panelCurveStoodDown = false;
 float g_panelCurveCurvature = 0.0f;
 int   g_panelCurveSegments = kDefaultSegments;
+bool  g_panelCurveSbs3D = false;
+bool  g_panelCurveSbsSwap = false;
 }  // namespace detail
 
 namespace {
@@ -147,7 +149,7 @@ float activeGain() {
     return g_sizeY * kPanelAspect * (g_basisLearned ? g_basisRatio : 1.0f);
 }
 
-ID3D11Buffer* g_vb = nullptr;
+ID3D11Buffer* g_vb[2] = {nullptr, nullptr};
 ID3D11Buffer* g_ib = nullptr;
 uint32_t      g_indexCount = 0;
 // What the buffers currently in hand were built for, so a live config edit
@@ -156,8 +158,10 @@ float         g_builtCurvature = -1.0f;
 int           g_builtSegments = -1;
 int           g_builtSign = 0;
 float         g_builtGain = -1.0f;
+bool          g_builtSbs = false;
 
-uint64_t g_substitutions = 0;
+uint32_t      g_drawsThisFrame = 0;
+uint64_t      g_substitutions = 0;
 
 // The saved input-assembler state lives at module scope, NOT in the lambda
 // that saves it.
@@ -246,6 +250,7 @@ void bend(float x, float c, int sign, float gain, float* xOut, float* zOut) {
 // broken one.
 bool learnSize(ID3D11DeviceContext* ctx) {
     if (g_zGainCfg > 0.0f) return true;   // the override needs nothing read
+    if (detail::g_panelCurveCurvature <= 0.0f) return true; // flat screen needs no depth gain
 
     if (g_sizePending) {
         if (!g_sizeStaging || nowMs() - g_sizeCopyMs < kReadbackLagMs) return false;
@@ -439,24 +444,7 @@ bool build(ID3D11DeviceContext* ctx) {
     const uint32_t verts = static_cast<uint32_t>(2 * (n + 1));
     const uint32_t idxs = static_cast<uint32_t>(6 * n);
 
-    Vertex vb[2 * (kMaxSegments + 1)];
     unsigned short ib[6 * kMaxSegments];
-
-    for (int i = 0; i <= n; ++i) {
-        // The ORIGINAL x drives the UV, and the bent one only the position:
-        // the bend moves where a column is, never which texel it shows.
-        const float x = -1.0f + 2.0f * static_cast<float>(i) / static_cast<float>(n);
-        float bx = 0.0f, bz = 0.0f;
-        bend(x, detail::g_panelCurveCurvature, g_sign, activeGain(), &bx, &bz);
-        const float u = (x + 1.0f) * 0.5f;
-
-        // Bottom row first, then the top -- the game's own ordering, which is
-        // what makes segments = 1 come out byte-identical to its quad. The
-        // capture measured v = 1 at y = -1 and v = 0 at y = +1, so V falls as
-        // Y rises; the other convention renders the screen upside down.
-        vb[i] = Vertex{bx, -1.0f, bz, u, 1.0f};
-        vb[(n + 1) + i] = Vertex{bx, 1.0f, bz, u, 0.0f};
-    }
 
     // The game's own index pattern, per quad, so the winding is right by
     // construction rather than by reasoning about cross products. Measured:
@@ -478,43 +466,83 @@ bool build(ID3D11DeviceContext* ctx) {
     ctx->GetDevice(&dev);
     if (!dev) return false;
 
-    if (g_vb) { g_vb->Release(); g_vb = nullptr; }
+    if (g_vb[0]) { g_vb[0]->Release(); g_vb[0] = nullptr; }
+    if (g_vb[1]) { g_vb[1]->Release(); g_vb[1] = nullptr; }
     if (g_ib) { g_ib->Release(); g_ib = nullptr; }
 
     D3D11_BUFFER_DESC bd{};
     D3D11_SUBRESOURCE_DATA sd{};
-
-    bd.ByteWidth = verts * sizeof(Vertex);
+    bd.ByteWidth = idxs * sizeof(unsigned short);
     bd.Usage = D3D11_USAGE_DEFAULT;
-    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    sd.pSysMem = vb;
-    HRESULT hr = dev->CreateBuffer(&bd, &sd, &g_vb);
-
-    if (SUCCEEDED(hr)) {
-        bd.ByteWidth = idxs * sizeof(unsigned short);
-        bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
-        sd.pSysMem = ib;
-        hr = dev->CreateBuffer(&bd, &sd, &g_ib);
-    }
-    dev->Release();
-
-    if (FAILED(hr) || !g_vb || !g_ib) {
-        if (g_vb) { g_vb->Release(); g_vb = nullptr; }
-        if (g_ib) { g_ib->Release(); g_ib = nullptr; }
+    bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    sd.pSysMem = ib;
+    HRESULT hr = dev->CreateBuffer(&bd, &sd, &g_ib);
+    if (FAILED(hr) || !g_ib) {
+        dev->Release();
         return false;
     }
+
+    const bool sbs = detail::g_panelCurveSbs3D;
+    const int vbCount = sbs ? 2 : 1;
+
+    for (int eyeIdx = 0; eyeIdx < vbCount; ++eyeIdx) {
+        Vertex vb[2 * (kMaxSegments + 1)];
+        for (int i = 0; i <= n; ++i) {
+            // The ORIGINAL x drives the UV, and the bent one only the position:
+            // the bend moves where a column is, never which texel it shows.
+            const float x = -1.0f + 2.0f * static_cast<float>(i) / static_cast<float>(n);
+            float bx = 0.0f, bz = 0.0f;
+            bend(x, detail::g_panelCurveCurvature, g_sign, activeGain(), &bx, &bz);
+            const float uNorm = (x + 1.0f) * 0.5f;
+            float u = uNorm;
+            if (sbs) {
+                u = (eyeIdx == 0) ? (uNorm * 0.5f) : (0.5f + uNorm * 0.5f);
+            }
+
+            // Bottom row first, then the top -- the game's own ordering, which is
+            // what makes segments = 1 come out byte-identical to its quad. The
+            // capture measured v = 1 at y = -1 and v = 0 at y = +1, so V falls as
+            // Y rises; the other convention renders the screen upside down.
+            vb[i] = Vertex{bx, -1.0f, bz, u, 1.0f};
+            vb[(n + 1) + i] = Vertex{bx, 1.0f, bz, u, 0.0f};
+        }
+
+        bd = {};
+        sd = {};
+        bd.ByteWidth = verts * sizeof(Vertex);
+        bd.Usage = D3D11_USAGE_DEFAULT;
+        bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        sd.pSysMem = vb;
+        hr = dev->CreateBuffer(&bd, &sd, &g_vb[eyeIdx]);
+        if (FAILED(hr) || !g_vb[eyeIdx]) {
+            if (g_vb[0]) { g_vb[0]->Release(); g_vb[0] = nullptr; }
+            if (g_vb[1]) { g_vb[1]->Release(); g_vb[1] = nullptr; }
+            if (g_ib) { g_ib->Release(); g_ib = nullptr; }
+            dev->Release();
+            return false;
+        }
+    }
+    dev->Release();
 
     g_indexCount = idxs;
     g_builtCurvature = detail::g_panelCurveCurvature;
     g_builtSegments = detail::g_panelCurveSegments;
     g_builtSign = g_sign;
     g_builtGain = activeGain();
-    Log::get().note(
-        "panel curvature: built a %d-column strip -- %u vertices, %u indices -- at "
-        "curvature %.3f, depth sign %+d. At curvature 0 and 1 column this is the "
-        "game's own quad to the byte, which is what makes a difference on screen "
-        "there a fault in the substitution rather than in the geometry.",
-        detail::g_panelCurveSegments, verts, idxs, detail::g_panelCurveCurvature, g_sign);
+    g_builtSbs = sbs;
+    if (sbs) {
+        Log::get().note(
+            "panel curvature: built stereoscopic SBS 3D %d-column strip -- %u vertices, %u indices "
+            "(eye 0 U 0.0..0.5, eye 1 U 0.5..1.0) at curvature %.3f.",
+            detail::g_panelCurveSegments, verts, idxs, detail::g_panelCurveCurvature);
+    } else {
+        Log::get().note(
+            "panel curvature: built a %d-column strip -- %u vertices, %u indices -- at "
+            "curvature %.3f, depth sign %+d. At curvature 0 and 1 column this is the "
+            "game's own quad to the byte, which is what makes a difference on screen "
+            "there a fault in the substitution rather than in the geometry.",
+            detail::g_panelCurveSegments, verts, idxs, detail::g_panelCurveCurvature, g_sign);
+    }
     return true;
 }
 
@@ -524,6 +552,8 @@ void panelCurveConfigure(Config& cfg) {
     const float wasCurve = detail::g_panelCurveCurvature;
     const int wasSeg = detail::g_panelCurveSegments;
     const int wasSign = g_sign;
+    const bool wasSbs = detail::g_panelCurveSbs3D;
+    const bool wasSwap = detail::g_panelCurveSbsSwap;
 
     float c = cfg.getFloat("fix.panel_curvature", 0.0f);
     if (c < 0.0f || c > kMaxCurvature) {
@@ -544,6 +574,9 @@ void panelCurveConfigure(Config& cfg) {
     g_sign = cfg.getIntInRange("advanced.panel_curvature_sign", 1, -1, 1) < 0 ? -1 : 1;
     g_zGainCfg = cfg.getFloat("advanced.panel_curvature_z_gain", 0.0f);
     if (g_zGainCfg < 0.0f || g_zGainCfg > 10000.0f) g_zGainCfg = 0.0f;
+
+    detail::g_panelCurveSbs3D = cfg.getBool("fix.vscreen_sbs_3d", false);
+    detail::g_panelCurveSbsSwap = cfg.getBool("advanced.vscreen_sbs_swap_eyes", false);
 
     // A strip of N columns has N-1 INTERIOR vertex columns, and the whole
     // bend lives in those: the two edges receive the SAME z whatever the
@@ -577,23 +610,48 @@ void panelCurveConfigure(Config& cfg) {
                 "identity test: the screen must look exactly as it does without "
                 "EDVR. Set the segment count back to %d to stop substituting.",
                 detail::g_panelCurveSegments, kDefaultSegments);
-        } else {
+        } else if (!detail::g_panelCurveSbs3D) {
             Log::get().note("panel curvature: off; the game's own quad is drawn.");
+        }
+    }
+
+    if (detail::g_panelCurveSbs3D != wasSbs || detail::g_panelCurveSbsSwap != wasSwap) {
+        if (detail::g_panelCurveSbs3D) {
+            Log::get().note(
+                "vscreen sbs 3d: on%s; virtual screen quad maps U in 0.0..0.5 for left eye and 0.5..1.0 for right eye.",
+                detail::g_panelCurveSbsSwap ? " (eyes swapped)" : "");
+        } else {
+            Log::get().note("vscreen sbs 3d: off.");
         }
     }
 }
 
-bool panelCurveSubstitute(ID3D11DeviceContext* ctx, PanelCurveDrawFn draw) {
+bool panelCurveSubstitute(ID3D11DeviceContext* ctx, PanelCurveDrawFn draw, int eye) {
     if (!ctx || !draw || detail::g_panelCurveStoodDown) return false;
 
     bool substituted = false;
     const bool ok = guardedBudget(g_budget, [&] {
         if (!learnSize(ctx)) return;
-        if (!g_vb || !g_ib || g_builtCurvature != detail::g_panelCurveCurvature ||
-            g_builtSegments != detail::g_panelCurveSegments || g_builtSign != g_sign ||
-            g_builtGain != activeGain()) {
+        if (!g_vb[0] || !g_ib || (detail::g_panelCurveSbs3D && !g_vb[1]) ||
+            g_builtCurvature != detail::g_panelCurveCurvature ||
+            g_builtSegments != detail::g_panelCurveSegments ||
+            g_builtSign != g_sign ||
+            (detail::g_panelCurveCurvature > 0.0f && g_builtGain != activeGain()) ||
+            g_builtSbs != detail::g_panelCurveSbs3D) {
             if (!build(ctx)) return;
         }
+
+        int targetEye = eye;
+        if (targetEye < 0) {
+            targetEye = static_cast<int>(g_drawsThisFrame & 1u);
+        }
+        ++g_drawsThisFrame;
+        if (detail::g_panelCurveSbsSwap) {
+            targetEye = 1 - targetEye;
+        }
+
+        ID3D11Buffer* ours = detail::g_panelCurveSbs3D ? g_vb[targetEye & 1] : g_vb[0];
+        if (!ours) return;
 
         // Save exactly what is about to be changed and nothing else. None of
         // these slots goes through an EDVR hook, so there is no shadow to
@@ -604,7 +662,6 @@ bool panelCurveSubstitute(ID3D11DeviceContext* ctx, PanelCurveDrawFn draw) {
         ctx->IAGetPrimitiveTopology(&g_savedTopo);
         g_saveHeld = true;
 
-        ID3D11Buffer* ours = g_vb;
         UINT stride = sizeof(Vertex);
         UINT offset = 0;
         ctx->IASetVertexBuffers(0, 1, &ours, &stride, &offset);
@@ -623,14 +680,22 @@ bool panelCurveSubstitute(ID3D11DeviceContext* ctx, PanelCurveDrawFn draw) {
 
         substituted = true;
         if (++g_substitutions == 1) {
-            Log::get().note(
-                "panel curvature: substituting the panel's quad for a %d-column "
-                "strip at curvature %.3f. If the screen is black from here, the "
-                "winding is inverted; if it is flat with several columns, the bend "
-                "is being cancelled by the transform; if it bows AWAY from you, "
-                "this build's handedness differs from the one this was measured "
-                "on and advanced.panel_curvature_sign = -1 is the fix.",
-                detail::g_panelCurveSegments, detail::g_panelCurveCurvature);
+            if (detail::g_panelCurveSbs3D) {
+                Log::get().note(
+                    "vscreen sbs 3d: substituting virtual screen quad for stereoscopic 3D "
+                    "(left eye U in 0.0..0.5, right eye U in 0.5..1.0%s)%s.",
+                    detail::g_panelCurveSbsSwap ? ", eyes swapped" : "",
+                    detail::g_panelCurveCurvature > 0.0f ? " with curvature" : "");
+            } else {
+                Log::get().note(
+                    "panel curvature: substituting the panel's quad for a %d-column "
+                    "strip at curvature %.3f. If the screen is black from here, the "
+                    "winding is inverted; if it is flat with several columns, the bend "
+                    "is being cancelled by the transform; if it bows AWAY from you, "
+                    "this build's handedness differs from the one this was measured "
+                    "on and advanced.panel_curvature_sign = -1 is the fix.",
+                    detail::g_panelCurveSegments, detail::g_panelCurveCurvature);
+            }
         }
     });
 
@@ -656,6 +721,10 @@ bool panelCurveSubstitute(ID3D11DeviceContext* ctx, PanelCurveDrawFn draw) {
     return substituted;
 }
 
+void panelCurveFrameBoundary() {
+    g_drawsThisFrame = 0;
+}
+
 void panelCurveShutdown() {
     // Any held references are dropped WITHOUT touching the context: shutdown
     // runs when the device may already be going away, and the bindings are
@@ -674,12 +743,16 @@ void panelCurveShutdown() {
         g_cbStagingBytes = 0;
         g_cbPending = false;
     }
-    if (g_vb) { g_vb->Release(); g_vb = nullptr; }
+    if (g_vb[0]) { g_vb[0]->Release(); g_vb[0] = nullptr; }
+    if (g_vb[1]) { g_vb[1]->Release(); g_vb[1] = nullptr; }
     if (g_ib) { g_ib->Release(); g_ib = nullptr; }
     g_indexCount = 0;
     g_builtCurvature = -1.0f;
     g_builtSegments = -1;
     g_builtSign = 0;
+    g_builtGain = -1.0f;
+    g_builtSbs = false;
+    g_drawsThisFrame = 0;
 }
 
 }  // namespace edvr

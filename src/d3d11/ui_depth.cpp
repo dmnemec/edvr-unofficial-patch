@@ -4019,6 +4019,12 @@ bool uiDepthHologramResolve(ID3D11DeviceContext* ctx, int eye, ID3D11Texture2D* 
                            (haveMask ? 16u : 0u);
     const HoloResolveCb data{g_holoFloor, g_holoShare, flags, s.radiusDepth, s.fillerDepth, 0.0f, 0.0f, 0.0f};
     vScreenUpdateSubresourceRaw(ctx, cb, 0, nullptr, &data, 0, 0);
+    // Unbind whatever was on OM (saving it for restore at the end of the resolve),
+    // so the compute shader and pixel shader SRVs (targetSrv / display) are never
+    // fought over an active output binding of the same resource.
+    ctx->OMGetRenderTargets(kMaxRtvs, g_savedRtvs, &g_savedDsv);
+    vScreenSetRenderTargetsRaw(ctx, 0, nullptr, nullptr);
+
     // The near-light map, filled once per eye before the resolve's own
     // draw below (round 7), from the same four inputs and the same CB:
     // narrows dark-pixel coverage there to a block's own light or one of
@@ -4077,7 +4083,6 @@ bool uiDepthHologramResolve(ID3D11DeviceContext* ctx, int eye, ID3D11Texture2D* 
         });
     }
     const bool ran = guardedBudget(g_holoBudget, [&] {
-        ctx->OMGetRenderTargets(kMaxRtvs, g_savedRtvs, &g_savedDsv);
         Microsoft::WRL::ComPtr<ID3D11VertexShader> savedVs;
         ID3D11ClassInstance* savedVsClasses[256]{}; UINT savedVsClassCount = 256;
         ctx->VSGetShader(&savedVs, savedVsClasses, &savedVsClassCount);
@@ -4164,8 +4169,8 @@ bool uiDepthHologramResolve(ID3D11DeviceContext* ctx, int eye, ID3D11Texture2D* 
         ctx->PSSetShaderResources(4, 1, savedSrv4.GetAddressOf());
         ctx->PSSetShaderResources(5, 1, savedSrv5.GetAddressOf());
         ctx->PSSetConstantBuffers(0, 1, savedCb0.GetAddressOf());
-        restoreOm(ctx);
     });
+    restoreOm(ctx);
     releaseSavedOm();
     if (!ran) {
         ++g_holoWindowDeclinedFault;

@@ -2693,7 +2693,8 @@ DrawVerdict beginPanelOverride(ID3D11DeviceContext* self, char kind, UINT count,
     // and again below is one resolve per draw, not two. It is skipped entirely
     // when the gate is off, because the answer costs a GetDesc and nothing
     // wants it.
-    if (headOffsetGateWantsPanel() && srv0IsPanelSized(s, kind, count)) {
+    const bool isPanel = srv0IsPanelSized(s, kind, count);
+    if (isPanel && (headOffsetGateWantsPanel() || panelCurveWants())) {
         ++s->panelCompositeDraws;
     }
 
@@ -2707,7 +2708,7 @@ DrawVerdict beginPanelOverride(ID3D11DeviceContext* self, char kind, UINT count,
     //
     // It sets a flag instead of returning a verdict because it has to compose
     // with the distance fix, which returns kPanel for this very draw.
-    if (panelCurveWants() && srv0IsPanelSized(s, kind, count)) {
+    if (panelCurveWants() && isPanel) {
         s->curveThisDraw = true;
     }
 
@@ -3874,8 +3875,16 @@ void forwardWithVerdict(ID3D11DeviceContext* self, DrawVerdict v,
     // here is a flat screen, never a missing one.
     if (g_state->curveThisDraw) {
         g_state->curveThisDraw = false;
+        int eye = -1;
+        if (g_state->rtv0Eye) {
+            const ResourceInfo* info = rtv0Resolved(g_state);
+            if (info) eye = uiDepthEyeOfTarget(info->resource, info->a, info->b, info->fmt);
+        }
+        if (eye < 0) {
+            eye = static_cast<int>((g_state->panelCompositeDraws > 0 ? g_state->panelCompositeDraws - 1 : 0) & 1u);
+        }
         const bool layered = uiLayer && uiLayerBegin(self);
-        const bool swallowed = panelCurveSubstitute(self, g_state->realDrawIndexedInstanced);
+        const bool swallowed = panelCurveSubstitute(self, g_state->realDrawIndexedInstanced, eye);
         if (layered) uiLayerEnd(self);
         if (swallowed) return;
     }
@@ -5517,6 +5526,7 @@ void vScreenFrameBoundary() {
         }
     }
     remlokFrameBoundary();
+    panelCurveFrameBoundary();
 
     // The per-frame invalidation lives in binding_shadow now, and device_hook
     // calls it once for both fixes. Doing it here as well would be harmless but
