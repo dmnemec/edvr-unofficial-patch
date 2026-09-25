@@ -21,11 +21,13 @@
 #include "gpu_timing.h"
 #include "dxbc_engine_velocity.h"
 #include "engine_velocity_emit.h"
+#include "engine_velocity_families.h"
 #include "engine_velocity_state.h"
 #include "kinematic_eval_hook.h"
 #include "kinematic_eval_probe.h"
 #include "vscreen.h"
 #include "../common/log.h"
+#include "../common/runtime_profile.h"
 #include "../common/timing.h"
 
 namespace edvr {
@@ -63,36 +65,15 @@ std::atomic<const ID3D11Resource*> watch[kWatchSlots] = {};
 // vs_DE54's ps_91F8937EDA723663 and ps_A6070F9DD1CFB601, whose input register
 // the family's SV_Position sits at holds another semantic (the patcher's
 // refusal; engine_velocity_test's --corpus candidates print it).
-struct Family {
-    uint64_t vs;
-    const char* name;
-    uint64_t ps[4];
-};
-constexpr Family kFamilies[] = {
-    {0xEB5234DB6ADB491Dull, "vs_EB5234DB6ADB491D", {0xCB9F297EFF264251ull, 0x9ABF60B4B51F2C1Full, 0x3434972DB5336AA4ull, 0}},
-    {0x5B4D8E894EEDA8B4ull, "vs_5B4D8E894EEDA8B4", {0x4375B72964F386CDull, 0, 0, 0}},
-    {0xBBE58E40FE88EC80ull, "vs_BBE58E40FE88EC80", {0xDB3E8D20CF53FBC0ull, 0, 0, 0}},
-    {0xDE545DC8EE4FBB87ull, "vs_DE545DC8EE4FBB87", {0xE46E3E4832B2FDB0ull, 0xCB429E043DBB2506ull, 0, 0}},
-    {0xAACFDCF2FB9AD809ull, "vs_AACFDCF2FB9AD809", {0xCF534B32F491561Aull, 0, 0, 0}},
-    {0x66DE2CADB1F4AE6Bull, "vs_66DE2CADB1F4AE6B", {0x864F1F949851B8DEull, 0, 0, 0}},
-    {0x61AE8EB05FDC18DDull, "vs_61AE8EB05FDC18DD", {0xFC43E42710010343ull, 0x451A82D4DD1BA254ull, 0, 0}},
-    {0x436193B352A2897Eull, "vs_436193B352A2897E", {0x16940F576006BE65ull, 0, 0, 0}},
-    {0x889A5279E68F0672ull, "vs_889A5279E68F0672", {0xB46E52A1E0B2F39Cull, 0xEBA95E15B0A66102ull, 0, 0}},
-};
-constexpr int kFamilyCount = static_cast<int>(sizeof(kFamilies) / sizeof(kFamilies[0]));
+using engine_velocity_family::Family;
+using engine_velocity_family::kFamilies;
+using engine_velocity_family::kFamilyCount;
+using engine_velocity_family::familyForProfile;
+using engine_velocity_family::keyedPs;
 static_assert(kFamilyCount <= kMaxFamilies, "familyDraws holds every family");
-
-int familyOfVs(uint64_t hash) {
-    for (int i = 0; i < kFamilyCount; ++i) if (kFamilies[i].vs == hash) return i;
-    return -1;
-}
-bool keyedPs(int family, uint64_t hash) {
-    if (family < 0 || !hash) return false;
-    for (uint64_t h : kFamilies[family].ps) if (h == hash) return true;
-    return false;
-}
 bool anyKeyedPs(uint64_t hash) {
-    for (int i = 0; i < kFamilyCount; ++i) if (keyedPs(i, hash)) return true;
+    for (int i = 0; i < kFamilyCount; ++i)
+        if ((!kFamilies[i].flatOnly || runtimeFlatProfile()) && keyedPs(i, hash)) return true;
     return false;
 }
 
@@ -197,6 +178,7 @@ struct Eye {
     UINT sceneBytes = 0;
     uint32_t frame = ~0u;                // the present frame this eye's data belongs to
     uint32_t rtvGen = 0, dsvGen = 0;     // the pass binding MRT6 was added to
+    bool bindingStale = false;           // an internal flat restore removed MRT6 without a game generation
     // The snapshot's sources, held (an equal pointer is then the same object),
     // and what they held: the view's element range, the watch epochs, the rows.
     Ptr<ID3D11ShaderResourceView> poolView;
@@ -858,7 +840,7 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     const uint64_t psHash = bindingShaderHash(BindSlot::Ps);
     int eye = -1, target = -1;
     const bool eyePass = rtv0Eye && dsv && depthProbeCurrentSceneEyeOf(dsv, &eye, &target) && (eye == 0 || eye == 1);
-    const int f = familyOfVs(vsHash);
+    const int f = familyForProfile(vsHash, runtimeFlatProfile());
     // On foot no pool draw targets an eye: the source pass is a pool family
     // draw into the depth screen_motion named this frame or the last two.
     bool sourcePass = false;
@@ -900,7 +882,7 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     if (sourcePass && !sourceCameraHolds(ctx, f, frame)) { restore(ctx); return; }
     const bool newFrame = e.frame != frame;
     Ptr<ID3D11Texture2D> depthTex;
-    if (newFrame || e.rtvGen != cache.rtv || e.dsvGen != cache.dsv) {
+    if (newFrame || e.bindingStale || e.rtvGen != cache.rtv || e.dsvGen != cache.dsv) {
         Ptr<ID3D11Resource> depthRes;
         dsv->GetResource(&depthRes);
         if (!depthRes || FAILED(depthRes.As(&depthTex))) { restore(ctx); return; }
@@ -913,6 +895,7 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         e.frame = frame;
         e.bound = e.boundCounted = e.written = e.invalid = e.consumed = false;
         e.rtvGen = e.dsvGen = 0;
+        e.bindingStale = false;
         const float cleared[4] = {-1.0f, 0.0f, 0.0f, 0.0f};
         const int clearTimer = beginCapture(ctx, kCaptureClear);
         ctx->ClearRenderTargetView(e.slotsRtv.Get(), cleared);
@@ -922,13 +905,14 @@ void slowPath(ID3D11DeviceContext* ctx, bool rtv0Eye) {
         endCapture(ctx, snapTimer);
     }
     if (e.invalid) { restore(ctx); return; }
-    if (e.rtvGen != cache.rtv || e.dsvGen != cache.dsv) {
+    if (e.bindingStale || e.rtvGen != cache.rtv || e.dsvGen != cache.dsv) {
         // Another pass binding of the same eye-frame must draw into the same
         // depth the slot target was made for.
         if (!newFrame && depthTex.Get() != e.depth.Get()) { invalidate(e, kDepthChanged); restore(ctx); return; }
         e.rtvGen = cache.rtv;
         e.dsvGen = cache.dsv;
         e.bound = bindTarget(ctx, e, dsv);
+        e.bindingStale = false;
         if (e.bound && !e.boundCounted) {
             e.boundCounted = true;
             ++g_draw.eyeFramesBound;
@@ -1291,7 +1275,7 @@ void engineVelocityShutdown() {
 
 void engineVelocityRememberVs(ID3D11VertexShader* shader, uint64_t hash, const void* bytecode, size_t bytes, bool linked) {
     if (t_creating || !shader || !bytecode || !bytes || bytes > 1024u * 1024u) return;
-    const int f = familyOfVs(hash);
+    const int f = familyForProfile(hash, runtimeFlatProfile());
     if (f < 0) return;
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     // One entry per shader OBJECT: the game may create a keyed hash many times.
@@ -1316,6 +1300,16 @@ void engineVelocityRememberPs(ID3D11PixelShader* shader, uint64_t hash, const vo
     g_ps.emplace(shader, std::move(info));
 }
 
+void engineVelocityAfterFlatDraw(ID3D11DeviceContext* ctx) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    restore(ctx);
+    // FlatRuntimeDrawScope next restores the game's MRTs under an internal
+    // guard, so the binding shadow's generations do not change. The source
+    // eye must reattach MRT6 on the next eligible draw of this same pass.
+    g_eyes[kEngineVelocitySourceEye].bindingStale = true;
+    cache = DrawCache{};
+}
+
 namespace engine_velocity_detail {
 void beforeDrawSlow(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     if (!ctx) return;
@@ -1330,7 +1324,8 @@ void beforeDrawSlow(ID3D11DeviceContext* ctx, bool rtv0Eye) {
     cache.eye = rtv0Eye;
     // The common case -- not a pool family's vertex shader, nothing of ours
     // bound -- costs no lock (terrain, the interface, every other pass).
-    if (!g_anyBound.load(std::memory_order_acquire) && familyOfVs(bindingShaderHash(BindSlot::Vs)) < 0) {
+    if (!g_anyBound.load(std::memory_order_acquire) &&
+        familyForProfile(bindingShaderHash(BindSlot::Vs), runtimeFlatProfile()) < 0) {
         cache.family = -1;
         ++g_draw.quickPaths;
         return;
@@ -1507,7 +1502,12 @@ bool engineVelocityTakeCaptureGpu(EngineVelocityCaptureGpu* out) {
     return any || out->untimed || out->invalid;
 }
 
-bool engineVelocityPoolFamilyVs(uint64_t vsHash) noexcept { return familyOfVs(vsHash) >= 0; }
+bool engineVelocityPoolFamilyVs(uint64_t vsHash) noexcept {
+    return familyForProfile(vsHash, runtimeFlatProfile()) >= 0;
+}
+bool engineVelocityPoolFamilyPair(uint64_t vsHash, uint64_t psHash) noexcept {
+    return keyedPs(familyForProfile(vsHash, runtimeFlatProfile()), psHash);
+}
 
 void engineVelocityNoteSource(ID3D11Texture2D* sourceDepth, ID3D11Buffer* sceneConstants,
                               EngineVelocitySourceSignal signal) {
