@@ -576,7 +576,7 @@ void panelCurveConfigure(Config& cfg) {
     if (g_zGainCfg < 0.0f || g_zGainCfg > 10000.0f) g_zGainCfg = 0.0f;
 
     detail::g_panelCurveSbs3D = cfg.getBool("fix.vscreen_sbs_3d", false);
-    detail::g_panelCurveSbsSwap = cfg.getBool("advanced.vscreen_sbs_swap_eyes", false);
+    detail::g_panelCurveSbsSwap = cfg.getBool("fix.vscreen_sbs_swap_eyes", false);
 
     // A strip of N columns has N-1 INTERIOR vertex columns, and the whole
     // bend lives in those: the two edges receive the SAME z whatever the
