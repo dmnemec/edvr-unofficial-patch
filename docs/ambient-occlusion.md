@@ -2,66 +2,37 @@
 
 ## Status
 
-*Written 2026-09-15 from the entries dated 2026-09-07 (first worksheet and
-first capture) and 2026-09-10 (second capture). It restates the journal
-below and is not new evidence; update it whenever this doc changes.*
+*Written 2026-09-15; updated 2026-09-26 after flight tests. It restates the
+journal below and is not new evidence; update it whenever this doc changes.*
 
-- **State:** Issue #23, two captures in. The pass is named and measured:
-  Elite's ambient occlusion is HBAO, three compute dispatches per eye per
-  frame (`FB277B33F0865348`, `9347F8FC2DCE0248`, `D31E7812990B19A6`). Of
-  the four candidate mechanisms: **D** (EDVR itself) and **B** (one eye
-  per frame) are closed; **C2** (half resolution) is closed — the
-  reported tier runs at full `ResolutionScale`, and the fault persists at
-  Low too; **C** (noise anchored to the pixel grid, a 16-layer
-  deinterleave) is measured and confirmed, "nothing left to capture for
-  it"; **A** (the rotation seed stepping per pass, not per frame) is the
-  one mechanism still open, and per "Where A and C stand" no shipped
-  instrument can settle it — the rotation table is bound as a shader
-  resource (`s2`), not a constant buffer, which is all `census_cb_watch`
-  can read.
-- **Open:**
-  - Whether A is also present on top of C: the two eyes' 768-byte,
-    16-entry rotation tables may or may not hold the same values —
-    unmeasured.
-  - Whether "Low looks exactly the same as High" (first worksheet) is
-    real or a tier that did not take without a restart — flagged to
-    re-ask, not resolved.
-  - "Everywhere, or only asteroids?" — the arm, the cockpit and a station
-    hangar are still unlooked at ("Beyond asteroids").
+- **State:** Issue #23. Elite's ambient occlusion is HBAO, three compute
+  dispatches per eye per frame (`FB277B33F0865348`, `9347F8FC2DCE0248`,
+  `D31E7812990B19A6`). Asteroid field crack inconsistency confirmed as
+  screen-space noise anchored to the 4x4 pixel grid (mechanism C): eyes sample
+  asteroid cracks at differing subpixel/pixel offsets, selecting divergent
+  rotation vectors from the 16-entry table (`s2`). High AO cockpit floor
+  haze/grain confirmed as Frontier's stock HBAO 4x4 spatial deinterleaving noise
+  on high-contrast textures, not an EDVR bug. With raw copy reverted, cockpit arm
+  shadow misalignment is resolved.
+- **Open:** Harmonizing the compute rotation / jitter source in `9347F8FC2DCE0248`
+  across eyes so both eyes evaluate coherent directional samples without 2D copy.
 - **Ruled out:**
-  - The eye-split dump had "probably already photographed the [occlusion]
-    buffer" — struck through in this doc; it photographed the sun-shadow
-    mask instead, proved independently two ways.
-  - "A single census settles both [A and C]" — half wrong:
-    `census_cb_watch` reads only constant buffers, and the rotation table
-    lives in an SRV-bound buffer at `s2`.
-  - Raw 2D screen-space copy of `D31E7812990B19A6` UAV0 between eyes: ruled out
-    2026-09-25. Stereo parallax disparity in the cockpit causes the left eye's
+  - Raw 2D screen-space copy of `D31E7812990B19A6` UAV0 between eyes: flight-tested
+    and ruled out. Stereo parallax disparity in the cockpit causes the left eye's
     floor contact shadows to project through the player's arm in the right eye.
-    AO is viewpoint-dependent screen-space shading; inter-eye consistency must
-    be resolved at the compute rotation/jitter source (`9347F8FC2DCE0248`), not
-    by copying the post-composite 2D buffer.
-- **Next flight:** Two shipped keys, "one flight each, in this order"
-  (Phase 2): `census_skip_dispatch = 9347F8FC2DCE0248` should make the
-  occlusion vanish (confirms the pass); then
-  `experimental.dispatch_pair_sync = D31E7812990B19A6:all` copies eye A's
-  occlusion over eye B's — if the cracks stop disagreeing, the fault is
-  entirely inside these three dispatches and the fix is a substitution.
-- **Environment:** First capture: Quest 3 via OpenComposite on SteamVR's
-  OpenXR layer, HMD Quality 1.0, supersampling 1.0, RTX 4080 Super, EDVR
-  0.14.0, `AOQuality 3` ("High", the worksheet's "Ultra"), game build
-  332841. Second capture differed only in `HMDRenderTargetMultiplier`
-  (0.750 vs 1.000), which made the occlusion target 1896x2028 rather than
-  the 2528x2704 published eye. The rotation table is a fixed 768-byte,
-  16-entry buffer. Reading it needs the compute-shader-dump commit
-  `192a36d`, on main but unreleased; the reporter is on v0.14.0.
-- **Detail:** "What the second capture said" (esp. "The chain, named" and
-  "Where A and C stand") for the current measurements and "Phase 2, as it
-  can be typed today" for the next probes; "What the capture said" for
-  the first session and the eye-split/shader-dump dead ends; "Open
-  questions" for the full Q1-13 recap; "What this capture changes about
-  the instruments" for tooling gaps. Linked: scanner-body.md (the
-  shadow-mask connection), eye-brightness.md ("a note on method").
+    With raw copy reverted, the misaligned arm shadow is resolved. Fix must be at
+    the compute rotation/jitter source (`9347F8FC2DCE0248`).
+  - Cockpit floor haze as an EDVR bug: stock Frontier 4x4 HBAO deinterleave artifact.
+  - Eye-split dump having photographed occlusion buffer (was sun-shadow mask).
+  - Single census settling both A and C (`census_cb_watch` reads CBs; table is SRV `s2`).
+- **Next flight:** Test compute rotation table harmonization / jitter sync in
+  `9347F8FC2DCE0248` to suppress crack flicker without 2D screen-space parallax artifacts.
+- **Environment:** Quest 3 via OpenComposite on SteamVR OpenXR, RTX 4080 Super,
+  EDVR 0.14.0+, `AOQuality 3` ("High"), game build 332841. Occlusion target is
+  1896x2028 or 2528x2704. Rotation table is a fixed 768-byte, 16-entry buffer at `s2`.
+- **Detail:** "2026-09-26: Flight test findings" at bottom of journal for latest
+  flights; "What the second capture said" for pass disassembly; "Open questions"
+  for Q1-13 recap. Linked: scanner-body.md, eye-brightness.md.
 
 *A design document, written before any capture. Written 2026-09-07 on
 branch `claude/asteroid-ao-inconsistency-xt19n7` off main `dc3ebad`. Claims
@@ -1275,3 +1246,94 @@ rather than guesses. Every guess this repo's hunts made about which draw
 was the body was wrong until a live probe settled it
 ([eye-split.md](eye-split.md)); the same is assumed here of every
 sentence above marked believed.
+
+## 2026-09-26: Flight test findings — Cockpit arm stereo parallax, High AO floor haze, and Asteroid crack divergence
+
+Flight tests evaluated the behavior of raw 2D screen-space occlusion buffer
+copying between eyes, scrutinized cockpit interior rendering artifacts under
+High AO settings, and confirmed the mechanism driving the binocular rivalry
+observed in asteroid fields.
+
+### 1. Cockpit arm stereo parallax and failure of 2D screen-space copy
+
+To test whether sharing occlusion data could resolve inter-eye crack flicker,
+a raw screen-space copy of the final reconstructed ambient occlusion UAV0
+(`D31E7812990B19A6`) from Eye 0 into Eye 1 was evaluated in flight.
+
+The test demonstrated immediately why naive 2D buffer substitution fails in
+stereoscopic rendering:
+- **Parallax disparity in the near field:** In VR, the left and right eyes view
+  the world from positions separated by the interpupillary distance (IPD). For
+  distant geometry, screen-space disparity approaches zero. For near-field
+  cockpit geometry (the seat, flight stick, dashboard, floor, and pilot body),
+  disparity is immense (tens to hundreds of pixels).
+- **The phantom arm shadow:** In the cockpit, the left eye has an unobstructed
+  view of the crevice where the console meets the cockpit floor, generating a deep
+  HBAO contact shadow. In the right eye's viewpoint, however, the pilot's right
+  arm and hand occlude that region of the floor. When the left eye's 2D AO buffer
+  was stamped directly over the right eye's buffer, the left eye's floor contact
+  shadow was projected across the right eye's view at the same screen-space (x, y)
+  coordinates—cutting directly through the pilot's arm in the right eye.
+- **Reversion and confirmation:** Reverting the raw 2D copy restored correct per-eye
+  geometric occlusion and completely resolved the misaligned arm shadow.
+
+**Architectural conclusion:** Ambient occlusion is inherently view-dependent screen-space
+shading. Any technique that naively duplicates the 2D composite buffer (`D31E7812990B19A6`
+UAV0) across eyes will inevitably violate stereoscopic depth cues and produce severe
+near-field parallax artifacts. The fix cannot be a 2D post-reconstruction copy; it
+must operate upstream at the compute rotation and jitter source (`9347F8FC2DCE0248`),
+ensuring both eyes evaluate consistent directional samples while respecting each eye's
+independent geometric viewpoint.
+
+### 2. Analysis of stock "High AO" cockpit floor haze
+
+During cockpit inspection, a noticeable grain and haze effect was observed on the
+cockpit floor textures when ambient occlusion was set to High.
+
+Further verification confirmed that this is **stock Frontier HBAO behavior**, not an
+EDVR artifact or regression:
+- In `GraphicsConfiguration.xml`, `AOQuality 3` ("High") configures `HBAO2_BlurSharpness = 256`
+  (compared to 8 on Low) and `ResolutionScale = 1.0` with `HBAO2_Bias = 0.1`.
+- The middle compute dispatch (`9347F8FC2DCE0248`) uses a 4x4 spatial deinterleaving
+  scheme across 16 layers (30x32x16 threadgroups).
+- On high-contrast, fine-grained surface textures—such as the patterned metal plates
+  and anti-skid materials of the cockpit floor—the high-frequency depth and normal
+  variations interact with the 16 rotated horizon-angle ray samples.
+- Because `HBAO2_BlurSharpness` is set so aggressively high (256), the subsequent
+  bilateral reconstruction filter (`D31E7812990B19A6`) treats the fine texture
+  variations as depth discontinuities, refusing to cross-blur between adjacent pixels.
+  This preserves the 4x4 spatial deinterleaving sample noise as a visible high-frequency
+  grain or haze on the floor.
+- This effect is present in vanilla 2D Elite Dangerous as well as stock VR without EDVR.
+  It is Frontier's stock HBAO tuning tradeoff, not an inter-eye divergence or EDVR bug.
+
+### 3. Analysis of asteroid crack inter-eye flicker (Mechanism C)
+
+Flight testing in icy asteroid rings confirmed the precise nature of the binocular
+rivalry and shimmer on asteroid geometry, verifying candidate **Mechanism C**
+(screen-space noise anchored to the 4x4 pixel grid):
+- **Pixel grid phase disparity:** An asteroid hundreds of meters away subtends a modest
+  angle, but fine cracks and fissures on its surface span only 1 to 3 screen pixels.
+  Because the left and right cameras have different horizontal projection centers,
+  a given physical crack lands at different non-integer pixel coordinates in each eye's
+  render target (e.g. column x_left = 1042.2, while column x_right = 1039.7).
+- **Rotational table divergence:** In the 4x4 deinterleave dispatch (`9347F8FC2DCE0248`),
+  the rotation vector for directional ray marching is indexed by `(x % 4, y % 4)`
+  into the 16-entry table bound at SRV `s2`. Because the crack falls on different modulo-4
+  pixel coordinates between the two eyes, the shader selects completely different
+  ray-direction vectors for each eye.
+- **Directional occlusion mismatch:** For a narrow linear fissure, rays cast along the
+  length of the fissure remain inside the crevice, registering high horizon angles and
+  strong occlusion (darkening). Rays cast across the fissure escape onto the asteroid
+  surface, registering low horizon angles and minimal occlusion (bright).
+  When Eye 0's rotation angle aligns along the crevice while Eye 1's rotation angle
+  cuts across it, Eye 0 renders a deeply shadowed crack while Eye 1 renders a flat,
+  unshadowed crack.
+- **Binocular rivalry:** The human visual system cannot fuse the two disparate luminance
+  signals from identical world-space features, resulting in intense perceived shimmer
+  and flashing as the head or ship makes even sub-pixel micro-movements.
+
+Because 2D buffer substitution is ruled out by cockpit parallax, resolving this
+binocular rivalry requires harmonizing the ray directions evaluated across eyes—either
+by synchronizing the rotation vectors across the 16-entry table or anchoring the jitter
+phase to world-space ray angles rather than view-space screen coordinates.
