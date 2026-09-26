@@ -38,6 +38,8 @@ void particleConfigure(Config& cfg);
 namespace detail {
 enum class ParticleMode { kStock, kSteady };
 extern ParticleMode g_particleMode;
+extern ParticleMode g_explosionMode;
+extern ParticleMode g_flareLightMode;
 // The two flags below are particle_fix.cpp's g_hideWitchspaceStars and
 // g_probe, published so the draw path's per-draw calls can be skipped
 // inline when they would return at their first line (the .cpp binds its old
@@ -46,18 +48,24 @@ extern bool g_particleHideStars;
 extern bool g_particleProbe;
 // The billboard transcriptions' vertex shader hashes, in kVariants order
 // (particle_fix.cpp static_asserts the two lists agree).
-inline constexpr uint64_t kParticleVariantVs[3] = {0xEB787F983BC1F5A3ull,
+inline constexpr uint64_t kParticleVariantVs[5] = {0xEB787F983BC1F5A3ull,
                                                    0x6041FD2D3D0164E1ull,
-                                                   0x68DDDEF04D9894AFull};
+                                                   0x68DDDEF04D9894AFull,
+                                                   0x9F4BBCFCD3B68BC9ull,
+                                                   0x78F5F08D02EE38CCull};
 // Unfixed billboard candidate shaders from shader dump analysis (docs/particle-billboards.md):
-// 1: 9F4BBCFCD3B68BC9, 2: 78F5F08D02EE38CC, 3: BBAD1CA808E1E292, 4: 1B285CBC9F185D4D
+// 1: 9F4BBCFCD3B68BC9 (fixed), 2: 78F5F08D02EE38CC (fixed), 3: BBAD1CA808E1E292, 4: 1B285CBC9F185D4D
 inline constexpr uint64_t kCandidateVs[4] = {0x9F4BBCFCD3B68BC9ull,
                                              0x78F5F08D02EE38CCull,
                                              0xBBAD1CA808E1E292ull,
                                              0x1B285CBC9F185D4Dull};
 void particleCheckCandidate(uint64_t h, char kind, uint32_t count, uint32_t instances);
 }  // namespace detail
-inline bool particleSteady() { return detail::g_particleMode == detail::ParticleMode::kSteady; }
+inline bool particleSteady() {
+    return detail::g_particleMode == detail::ParticleMode::kSteady ||
+           detail::g_explosionMode == detail::ParticleMode::kSteady ||
+           detail::g_flareLightMode == detail::ParticleMode::kSteady;
+}
 
 // Is this draw the witchspace starfield, with fix.witchspace_stars = off?
 // True means do not forward it. Nothing is substituted: the draw is simply
@@ -94,9 +102,10 @@ inline bool particleOnDrawMayMatch(char kind, uint32_t count, uint32_t instances
         detail::particleCheckCandidate(heldVsHash, kind, count, instances);
     }
     if (heldVsHash == 0) return true;
-    return heldVsHash == detail::kParticleVariantVs[0] ||
-           heldVsHash == detail::kParticleVariantVs[1] ||
-           heldVsHash == detail::kParticleVariantVs[2];
+    for (int i = 0; i < 5; ++i) {
+        if (heldVsHash == detail::kParticleVariantVs[i]) return true;
+    }
+    return false;
 }
 
 // Bind the substituted constants for one draw, and put the game's back.

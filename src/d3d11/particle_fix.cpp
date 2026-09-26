@@ -17,9 +17,11 @@
 #include "../common/timing.h"
 #include "binding_shadow.h"   // bindingShaderHash: the bound vertex shader's hash, set with the shader
 #include "exposure_fix.h"   // lookupShaderHash
+#include "explosion_vs.h"
 #include "flare_vs.h"
 #include "particle_vs.h"
 #include "shader_swap.h"
+#include "spotlight_flare_vs.h"
 #include "stretched_vs.h"
 
 namespace edvr {
@@ -30,6 +32,8 @@ namespace edvr {
 // name its kSteady value.
 namespace detail {
 ParticleMode g_particleMode = ParticleMode::kStock;
+ParticleMode g_explosionMode = ParticleMode::kStock;
+ParticleMode g_flareLightMode = ParticleMode::kStock;
 // Published for the draw path's inline first tests (particle_fix.h); the
 // file-local names below are references to these.
 bool g_particleHideStars = false;
@@ -104,6 +108,9 @@ constexpr uint64_t kStretchedVs = 0x68DDDEF04D9894AFull;
 constexpr uint64_t kWitchspaceStarsVs = 0x9AEC596A2B036EA6ull;
 // Bound to the published flag witchspaceStarsHidden() reads (particle_fix.h).
 bool& g_hideWitchspaceStars = detail::g_particleHideStars;
+constexpr uint64_t kExplosionVs = 0x9F4BBCFCD3B68BC9ull;
+constexpr uint64_t kSpotlightFlareVs = 0x78F5F08D02EE38CCull;
+
 struct BillboardVariant {
     uint64_t    hash;
     const char* hlsl;
@@ -111,7 +118,7 @@ struct BillboardVariant {
     const char* name;      // names the compile in the log
 };
 
-constexpr int kVariantCount = 3;
+constexpr int kVariantCount = 5;
 const BillboardVariant kVariants[kVariantCount] = {
     {kPlumeVs, kParticleWorldVS, sizeof(kParticleWorldVS) - 1,
      "particle_vs"},
@@ -119,18 +126,26 @@ const BillboardVariant kVariants[kVariantCount] = {
      "flare_vs"},
     {kStretchedVs, kParticleStretchedWorldVS, sizeof(kParticleStretchedWorldVS) - 1,
      "stretched_vs"},
+    {kExplosionVs, kExplosionWorldVS, sizeof(kExplosionWorldVS) - 1,
+     "explosion_vs"},
+    {kSpotlightFlareVs, kSpotlightFlareWorldVS, sizeof(kSpotlightFlareWorldVS) - 1,
+     "spotlight_flare_vs"},
 };
 // The draw path's inline prefilter (particleOnDrawMayMatch, particle_fix.h)
 // compares against its own copy of these hashes; a variant added here and
 // not there would be silently never offered, so the two lists must agree.
-static_assert(kVariantCount == 3 && detail::kParticleVariantVs[0] == kPlumeVs &&
+static_assert(kVariantCount == 5 && detail::kParticleVariantVs[0] == kPlumeVs &&
                   detail::kParticleVariantVs[1] == kFlareVs &&
-                  detail::kParticleVariantVs[2] == kStretchedVs,
+                  detail::kParticleVariantVs[2] == kStretchedVs &&
+                  detail::kParticleVariantVs[3] == kExplosionVs &&
+                  detail::kParticleVariantVs[4] == kSpotlightFlareVs,
               "particle_fix.h's kParticleVariantVs must list kVariants' hashes in order");
 
 const char* variantLabel(int v) {
     if (v == 1) return "solar flare";
     if (v == 2) return "stretched particle";
+    if (v == 3) return "explosion";
+    if (v == 4) return "light flare";
     return "smoke plume";
 }
 
@@ -505,11 +520,11 @@ bool witchspaceStarsSkip(ID3D11DeviceContext* ctx, char kind, uint32_t count,
 }
 
 void* particleTarget() {
-    return detail::g_particleMode == Mode::kSteady ? g_target : nullptr;
+    return particleSteady() ? g_target : nullptr;
 }
 
 void particleCapture(const void* data, uint32_t bytes) {
-    if (detail::g_particleMode != Mode::kSteady || !data || bytes < 64 || bytes > kMaxShadow) {
+    if (!particleSteady() || !data || bytes < 64 || bytes > kMaxShadow) {
         g_shadowValid = false;
         return;
     }
@@ -520,12 +535,15 @@ void particleCapture(const void* data, uint32_t bytes) {
 
 bool particleOnDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
                     uint32_t instances) {
-    if (detail::g_particleMode != Mode::kSteady || !ctx) return false;
+    if (!particleSteady() || !ctx) return false;
     if (kind != 'X' && kind != 'N') return false;
     const uint64_t boundVs = boundVsHashFast(ctx);
     if (boundVs) detail::particleCheckCandidate(boundVs, kind, count, instances);
     const int variant = billboardVariantFor(ctx);
     if (variant < 0) return false;
+    if (variant == 3 && detail::g_explosionMode != Mode::kSteady) return false;
+    if (variant == 4 && detail::g_flareLightMode != Mode::kSteady) return false;
+    if (variant < 3 && detail::g_particleMode != Mode::kSteady) return false;
     g_activeVariant = variant;
 
     // Follow the buffer the game binds for these draws. Learning it here
@@ -644,14 +662,17 @@ void particleEnd(ID3D11DeviceContext* ctx) {
         Log::get().note(
             "particle billboard: steady -- %llu draw(s) in the last ten "
             "seconds through the replacement shader (%llu smoke plume, "
-            "%llu solar flare, %llu stretched particle), %llu of them with a solved viewer at "
+            "%llu solar flare, %llu stretched particle, %llu explosion, %llu light flare), "
+            "%llu of them with a solved viewer at "
             "(%.1f %.1f %.1f). Each quad now faces the viewer instead of "
-            "the view axis. A zero in one of the three is not a fault -- it "
+            "the view axis. A zero in one of the five is not a fault -- it "
             "means you were nowhere near that effect.",
             static_cast<unsigned long long>(g_applied - g_appliedAtNote),
             static_cast<unsigned long long>(g_appliedBy[0]),
             static_cast<unsigned long long>(g_appliedBy[1]),
             static_cast<unsigned long long>(g_appliedBy[2]),
+            static_cast<unsigned long long>(g_appliedBy[3]),
+            static_cast<unsigned long long>(g_appliedBy[4]),
             static_cast<unsigned long long>(g_facingUsed),
             g_lastFacing[0], g_lastFacing[1], g_lastFacing[2]);
         g_noteMs = now;
@@ -711,11 +732,61 @@ void particleConfigure(Config& cfg) {
                 "the camera. Read from the game's own shader: "
                 "docs/particle-billboards.md.");
         } else {
-            g_target = nullptr;
-            g_shadowValid = false;
             Log::get().note("particle billboard: stock.");
         }
     }
+
+    const Mode wasExpMode = detail::g_explosionMode;
+    const std::string expStr = runtimeVrProfile() ?
+        cfg.getString("fix.explosion_billboard", "steady") : "stock";
+    if (expStr == "steady") {
+        detail::g_explosionMode = Mode::kSteady;
+    } else {
+        if (expStr != "stock") {
+            Log::get().note("explosion billboard: that is not stock or "
+                            "steady; running stock.");
+        }
+        detail::g_explosionMode = Mode::kStock;
+    }
+    if (detail::g_explosionMode != wasExpMode) {
+        if (detail::g_explosionMode == Mode::kSteady) {
+            g_learnNoted = false;
+            Log::get().note(
+                "explosion billboard: STEADY -- explosion sprites are locked "
+                "to world up instead of tilting with your head.");
+        } else {
+            Log::get().note("explosion billboard: stock.");
+        }
+    }
+
+    const Mode wasFlareMode = detail::g_flareLightMode;
+    const std::string flareStr = runtimeVrProfile() ?
+        cfg.getString("fix.light_flare_billboard", "stock") : "stock";
+    if (flareStr == "steady") {
+        detail::g_flareLightMode = Mode::kSteady;
+    } else {
+        if (flareStr != "stock") {
+            Log::get().note("light flare billboard: that is not stock or "
+                            "steady; running stock.");
+        }
+        detail::g_flareLightMode = Mode::kStock;
+    }
+    if (detail::g_flareLightMode != wasFlareMode) {
+        if (detail::g_flareLightMode == Mode::kSteady) {
+            g_learnNoted = false;
+            Log::get().note(
+                "light flare billboard: STEADY -- spotlight and station lens "
+                "flare sprites are locked to world up.");
+        } else {
+            Log::get().note("light flare billboard: stock.");
+        }
+    }
+
+    if (!particleSteady()) {
+        g_target = nullptr;
+        g_shadowValid = false;
+    }
+
     const bool was = g_probe;
     g_probe = cfg.getBool("advanced.particle_probe", false);
     if (g_probe != was) {
@@ -733,7 +804,7 @@ void particleConfigure(Config& cfg) {
 }
 
 bool particleWantsDraws() {
-    return g_probe || detail::g_particleMode == Mode::kSteady;
+    return g_probe || particleSteady();
 }
 
 void particleOnEyeDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
