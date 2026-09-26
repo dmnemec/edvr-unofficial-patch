@@ -135,6 +135,15 @@ minutes after a flight finally reproduced the effect being chased.
   arrival; a fix that returned early shadowed the probe meant to measure
   it, and cost a flight. Ask what would appear in the log if the new code
   never ran, and make sure that is distinguishable from success.
+- **Every test build must include an actionable flight test checklist.**
+  Whenever you produce or promote a build ready for flight testing, you
+  must provide the pilot a concrete checklist:
+  1. Exactly what has to be tested in that version.
+  2. Exactly how to test it (in-game scenarios, locations, required settings,
+     and specific head movements or actions to perform).
+  3. The positive and negative signals to look for (the precise visual cues,
+     motion responses, or log signatures that confirm success or indicate
+     failure).
 
 ## Editing config and INI files
 
