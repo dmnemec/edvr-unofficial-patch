@@ -49,6 +49,13 @@ extern bool g_particleProbe;
 inline constexpr uint64_t kParticleVariantVs[3] = {0xEB787F983BC1F5A3ull,
                                                    0x6041FD2D3D0164E1ull,
                                                    0x68DDDEF04D9894AFull};
+// Unfixed billboard candidate shaders from shader dump analysis (docs/particle-billboards.md):
+// 1: 9F4BBCFCD3B68BC9, 2: 78F5F08D02EE38CC, 3: BBAD1CA808E1E292, 4: 1B285CBC9F185D4D
+inline constexpr uint64_t kCandidateVs[4] = {0x9F4BBCFCD3B68BC9ull,
+                                             0x78F5F08D02EE38CCull,
+                                             0xBBAD1CA808E1E292ull,
+                                             0x1B285CBC9F185D4Dull};
+void particleCheckCandidate(uint64_t h, char kind, uint32_t count, uint32_t instances);
 }  // namespace detail
 inline bool particleSteady() { return detail::g_particleMode == detail::ParticleMode::kSteady; }
 
@@ -83,6 +90,9 @@ inline bool particleOnDrawMayMatch(char kind, uint32_t count, uint32_t instances
                                    uint64_t heldVsHash) {
     if (kind != 'X' && kind != 'N') return false;
     if (instances == 0 || count < 6) return false;
+    if (heldVsHash != 0) {
+        detail::particleCheckCandidate(heldVsHash, kind, count, instances);
+    }
     if (heldVsHash == 0) return true;
     return heldVsHash == detail::kParticleVariantVs[0] ||
            heldVsHash == detail::kParticleVariantVs[1] ||

@@ -522,7 +522,8 @@ bool particleOnDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
                     uint32_t instances) {
     if (detail::g_particleMode != Mode::kSteady || !ctx) return false;
     if (kind != 'X' && kind != 'N') return false;
-    if (instances == 0 || count < 6) return false;
+    const uint64_t boundVs = boundVsHashFast(ctx);
+    if (boundVs) detail::particleCheckCandidate(boundVs, kind, count, instances);
     const int variant = billboardVariantFor(ctx);
     if (variant < 0) return false;
     g_activeVariant = variant;
@@ -801,5 +802,26 @@ void particleShutdown() {
     g_stagingBytes = 0;
     g_pending = false;
 }
+
+namespace detail {
+void particleCheckCandidate(uint64_t h, char kind, uint32_t count, uint32_t instances) {
+    for (int i = 0; i < 4; ++i) {
+        if (h == kCandidateVs[i]) {
+            static uint64_t s_seenCount[4] = {};
+            static uint64_t s_lastLogMs[4] = {};
+            ++s_seenCount[i];
+            const uint64_t now = nowMs();
+            if (now - s_lastLogMs[i] >= 2000) {
+                s_lastLogMs[i] = now;
+                Log::get().note(
+                    "particle candidate %d (%016llX): draw seen -- kind=%c count=%u instances=%u (seen %llu times this session)",
+                    i + 1, static_cast<unsigned long long>(kCandidateVs[i]), kind, count, instances,
+                    static_cast<unsigned long long>(s_seenCount[i]));
+            }
+            break;
+        }
+    }
+}
+}  // namespace detail
 
 }  // namespace edvr

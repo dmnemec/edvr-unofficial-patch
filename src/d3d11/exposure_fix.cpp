@@ -860,41 +860,10 @@ void STDMETHODCALLTYPE hookedDispatch(ID3D11DeviceContext* self, UINT x, UINT y,
         }
     }
 
-    // Ambient occlusion eye sync (fix.ao_eye_sync): for HBAO reinterleave & blur
-    // compute shader (D31E7812990B19A6), copy occurrence 1's UAV0 over
-    // occurrence 2's after it runs so both eyes receive identical ambient occlusion.
-    // Zero overhead when off (single bool check s->aoEyeSync).
-    if (s->aoEyeSync && hashOf(bindingGet(BindSlot::Cs)) == kAoReinterleaveBlurCs) {
-        ++s->aoSyncSeen;
-        if (s->aoSyncSeen == 1) {
-            s->aoFirstUav = bindingGet(BindSlot::CsUav0);
-        } else if (s->aoSyncSeen == 2 && s->aoFirstUav) {
-            void* secondUav = bindingGet(BindSlot::CsUav0);
-            s->computeThisFrame = true;
-            s->realDispatch(self, x, y, z);
-            guardedBudget(g_budget, [&] {
-                ID3D11Resource* a = nullptr;
-                ID3D11Resource* b = nullptr;
-                static_cast<ID3D11UnorderedAccessView*>(s->aoFirstUav)->GetResource(&a);
-                if (secondUav) {
-                    static_cast<ID3D11UnorderedAccessView*>(secondUav)->GetResource(&b);
-                }
-                if (a && b && a != b) {
-                    self->CopyResource(b, a);
-                    ++s->aoSyncCopies;
-                    if (!s->aoSyncNoted) {
-                        s->aoSyncNoted = true;
-                        Log::get().note(
-                            "ao_eye_sync: engaged -- ambient occlusion output "
-                            "(D31E7812990B19A6) synchronized from first eye to second eye.");
-                    }
-                }
-                if (a) a->Release();
-                if (b) b->Release();
-            });
-            return;   // forwarded above
-        }
-    }
+    // Ambient occlusion eye sync (fix.ao_eye_sync): raw screen-space UAV0 copy
+    // of D31E7812990B19A6 was ruled out on 2026-09-25: stereo parallax in the
+    // cockpit projects floor shadows through the player's arm in the second eye.
+    // Inter-eye consistency is in research for compute rotation table (9347F8FC2DCE0248).
 
     // The pair-sync experiment: occurrence 1 of the named shader lends its
     // UAV0; occurrence 2 runs its own dispatch and is then overwritten by a
