@@ -35,6 +35,12 @@ below and is not new evidence; update it whenever this doc changes.*
   - "A single census settles both [A and C]" — half wrong:
     `census_cb_watch` reads only constant buffers, and the rotation table
     lives in an SRV-bound buffer at `s2`.
+  - Raw 2D screen-space copy of `D31E7812990B19A6` UAV0 between eyes: ruled out
+    2026-09-25. Stereo parallax disparity in the cockpit causes the left eye's
+    floor contact shadows to project through the player's arm in the right eye.
+    AO is viewpoint-dependent screen-space shading; inter-eye consistency must
+    be resolved at the compute rotation/jitter source (`9347F8FC2DCE0248`), not
+    by copying the post-composite 2D buffer.
 - **Next flight:** Two shipped keys, "one flight each, in this order"
   (Phase 2): `census_skip_dispatch = 9347F8FC2DCE0248` should make the
   occlusion vanish (confirms the pass); then
