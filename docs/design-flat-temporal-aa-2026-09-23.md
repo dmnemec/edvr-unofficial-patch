@@ -25,7 +25,12 @@
   treatment; 40-43 establish cockpit projection and smoother DLSS edges; 45-48
   diagnose missing ownership and its binding repair. The first loading crash
   did not reproduce on retry; its cause remains unknown. Sections 49-50 qualify
-  rigid BFE shell motion and the PS91 register correction.
+  rigid BFE shell motion and the PS91 register correction. Section 58 records
+  the rc.2 on-foot reset storm: unreciped scene pairs poison temporal history
+  every frame; the live `fix.temporal_aa` change is ruled out as the cause.
+  Section 59 pins those pairs to EDHM's patched pixel shaders (the 21:08
+  no-EDHM control accumulates normally at the same main menu) and adds their
+  exact recipes; mod-patched shader populations remain an open coverage class.
 - **Priority (Sean):** performance over code sharing. Share math/backends where
   cheap; keep separate frame scheduling/capture paths when that avoids copies,
   synchronization or additional per-draw work. Defer broad core extraction
@@ -43,7 +48,8 @@
 - **Next:** fly the Epic install on foot in the hangar and concourse. The
   section-57 admission should end the hdr-camera-changed refusal cascade;
   confirm treated streaks resume on foot, watch the weapon itself for local
-  rejection crawl, and check the concourse for any new unknown-pair captures.
+  rejection crawl. Section 59's EDHM recipes want one main-menu flight with
+  EDHM chained: confirm zero unknown-pair captures and resuming streaks.
   Existing evidence does not justify ignoring the alternate projection.
   Preserve high-G motion and strict depth ownership; do not repeat qualified
   PS91/BFE or stale-resize hypotheses. The separate menu hangar-floor P1
@@ -3536,3 +3542,170 @@ The merged tree's first full build flaked once in `scheduler_stack_probe_test`
 passed standalone three times and in the full retry, so it is recorded here as
 a load-sensitive flake alongside the run_jobs and vtable history rather than
 chased further.
+
+## 58. Reset-storm symptom is scene content, not the live mode change (2026-09-25)
+
+Sean reported that changing `fix.temporal_aa` from the F8 menu made flat
+temporal AA disengage until restart. Verified Epic `edvr_gfx_20260925_193443.log`
+with `tools/edvr_log.py --expect-build HEAD`: `v0.18.0-rc.2`, build `6AB6DC53`.
+Menu writes ran 19:35:00-19:35:55 from the main menu (plus further toggles to
+19:36:38); the scene came up at 19:35:15 (frame 32172). From that frame to
+session end, every treated frame was a full reset: `accepted-history-5s=0`,
+`longest-treated-streak=1`, per-frame `requested=1` in the resolve reset
+events, and the phase census reports 361/438 frames failed in the first storm
+window (reasons: `unknown-scene-projection-recipe`,
+`projection-preparation-refused`). The adapter's own reset counters
+(no-previous/frame-gap/depth/color/extent) stayed near zero, so the resets
+came from the jitter-validity term at `flat_runtime.cpp:1423`
+(`s.jitterWanted && (s.phase.failed || !s.phase.previousAcceptedValid)`):
+each unreciped scene draw calls `failPhase`, so no frame ever finishes clean,
+so history is never offered to the next frame. A temporal backend reset every
+frame displays current-frame-only output -- visually identical to AA off.
+
+Ruled out: the live mode/model change as the cause. (a) The 14:18 session on
+`84733e9c` changed off->on->dlss live on foot and was `treated-jittered` with
+`accepted-history-5s`~450 within five seconds. (b) The 10:38 session on
+`ad7607c6` stormed before, during and after its live changes
+(dlss->fsr->off->on->dlss, model k->j->l->m) and recovered mid-session at
+10:42:05 when the unreciped content left view, with no restart; the same storm
+recurred at 10:43:29 when it returned. (c) `84733e9c..ac2e0b29` changes only
+menu.cpp's FPS-readout clock and release packaging -- no temporal-path code.
+(d) The 19:34 session was itself a fresh launch and stormed from the first
+scene frame, so "restart fixes it" is not supported: restart only changes what
+is on screen. Every menu write was applied at the next frame boundary
+(`mode=`/`DLSS model=` lines track each change); the live-apply path is
+healthy.
+
+The storm is content-driven. New unknown pairs, automatically captured with
+exact creation bytecode saved under `edvr_logs\shaders` (six stages, zero
+failures, verified present on disk):
+
+| Pair (VS/PS) | Target |
+| --- | --- |
+| `AACFDCF2FB9AD809` / `CAD1F585EDDC5641` | fmt 23, 3840x2160 |
+| `0357BBB2DEE43C1F` / `BE02244365AD810C` | fmt 26, 3840x2160 |
+| `361CD4B7FF213A01` / `CDDFE2157F5654B8` | fmt 23, 3840x2160 |
+| `525D47E3D5E2EFF4` / `0D617929FED842F0` (17:36 session) | fmt 26 |
+| `EB5234DB6ADB491D` / `63B1524A9F805A4C` (17:36 session) | fmt 23 |
+
+These are not the section-57 four (those have recipes since `dacb7a56`).
+`361CD4B7FF213A01` already has a recipe with PS `FA7411BF7E4C4088`; the game
+pairs the same VS with a new PS here. `AACFDCF2FB9AD809` is the known
+engine-motion family VS and `0357BBB2DEE43C1F` the documented b2[10..13]
+projection family, so recipe development can follow the section-24/57 process
+offline without another capture flight.
+
+Adjacent gaps noticed, recorded for routing, not folded in: the disengage is
+silent in game -- the only signal is the log's jitter-refusal and reset-event
+lines -- and a single permanently on-screen unreciped pair poisons history for
+the whole session regardless of how few pixels it touches.
+
+## 59. Main-menu reset storm is EDHM's patched pixel shaders (2026-09-25)
+
+Sean's toggle flight pins the section-58 storm's variable: EDHM. Both broken
+rc.2 sessions (17:36, 19:34) chain `d3d11_edhm.dll` (41 exports); the 21:08
+no-EDHM control session at the same main menu has zero unknown-pair captures
+and accumulates normally (`treated-jittered`, accepted-history-5s ~430,
+growing streaks). EDHM patches pixel shaders, which changes their exact
+creation hashes: all five section-58 pairs are known VS hashes paired with
+unseen PS hashes. Pairs 1-3 declare EDHM's `t120` 1D lookup table (absent
+from every stock companion); the 361C companion diff against stock
+`ps_FA7411BF7E4C4088` shows the mod's ~29-line colour block and register
+renumbering beside the original code.
+
+Classification of the captured bytecode (listings in ignored
+`build/flat-audit-menu/`): none of the five new PS blobs consumes a
+projection. CAD1 (pair 1) and 63B1 (pair 5) read only the CB1[277..279]
+orientation rows; CDDF (pair 3) uses texcoord UVs and scalar config reads;
+BE02 (pair 2) reads vPos only as an integer pixel-grid lookup and rebuilds
+position from a view-space varying formed from CB2[2..4], not the patched
+CB2[10..13]. Pair 4's VS remains inert (no constant buffer at all) and its
+new PS filters screen colour with a vPos-scaled mask, so that pair joins the
+explicit unchanged list beside its stock companion F0BA.
+
+Change: exact recipes for the four projected pairs -- AACF/CAD1, EB52/63B1
+and 361C/CDDF as CB1[270..273] ForwardColumns, 0357/BE02 as CB2[10..13]
+ForwardDp4 -- plus the inert 525D/0D61 classification, with census coverage
+in the flat rig (exact-pair admission, wrong-PS/wrong-VS/absent-PS refusal,
+unchanged-list exactness). Hashes are stable per EDHM configuration, so this
+unblocks Sean's current EDHM setup; an EDHM settings change can mint new PS
+hashes and re-trigger the storm, which the log's unknown-pair capture will
+continue to report.
+
+Open, recorded for routing and deliberately not folded into this change:
+exact-hash recipes cannot keep pace with mod-patched shader populations --
+Sean reports the same failure class from ReShade users. The systemic answer
+is a runtime PS-safety classification at the unknown-pair path (the
+creation-bytecode cache already retains the bytes), which is a design change
+needing its own qualification. The disengage also remains silent in game:
+the only user-visible signal is AA looking off, and the evidence lives only
+in the log's jitter-refusal and reset-event lines.
+
+## 60. Maxed-settings capture: four stock lighting variants (2026-09-26)
+
+Sean ran the all-settings-maxed capture on Epic (`edvr_gfx_20260926_054653.log`,
+build `6AB73CBB` = rc.2-5-g58974c5a, EDHM chained). The session first shows
+flat AA working with EDHM at his previous settings: `treated-jittered` at
+05:48:04 with accepted-history ~257/5s and a 71 streak. After the settings
+were maxed, four unknown pairs appeared in one burst at 05:48:41 and the
+section-58 storm resumed. None of the four PS blobs declares EDHM's t120
+table: these are STOCK variants minted by the settings tiers, not mod
+patches -- the first direct capture of the settings-variant mechanism a
+user report (20260926_121716 bundle, unreciped glare `3D05E7CF11AC9BEE` and
+deferred-UI blend `F512712C40D93C12/4A71EB0D34E9F2EF`, no mod chain)
+pointed at.
+
+Bytecode classification (build/flat-audit-menu): all four pairs are clean.
+AFED (F512 companion, 2513 instructions) is clustered forward lighting for
+glass; 3B0B (EB78 companion, 2081) is gobo/projector-quad forward lighting
+whose projective divides are LIGHT-space cookie projections (cb1[165..172]),
+not camera rows; 3D84 (24DE companion) and 70E6 (0357 companion) are
+deferred light passes using the same integer pixel-grid depth reads and
+view-ray/`cb2[2..4]` reconstruction the table already accepts for their
+stock companions. vPos appears only as integer tile/pixel-grid lookups. No
+DoF/bokeh gather kernels materialized in this batch; blur/DoF passes remain
+unqualified and are the expected source of the next settings-tier captures.
+
+Change: exact recipes for the four pairs -- F512/AFED and EB78/3B0B as
+CB1[270..273] ForwardColumns, 24DE/3D84 and 0357/70E6 as CB2[10..13]
+ForwardDp4 -- with census coverage in the flat rig. The settings-maxed
+flight with this build should now hold treated streaks where 05:48:41
+stormed. The bundle user's two pairs still want his blobs
+(`vs_3D05E7CF11AC9BEE`, `ps_4A71EB0D34E9F2EF`) from his machine, or the
+generic classifier, to cover.
+
+## 61. The maxed-settings chain: DoF-composite tone variant (2026-09-26)
+
+The settings-max failure had a second, larger half the recipes could not
+touch: with the settings maxed the selector refuses every frame with
+`no-known-tone-pass` -- the post chain itself changed. The config diff
+(Sean's fxcfg vs his 2026-09-21 baseline) names the maxed set: BlurEnabled
+on, DOFEnabled 2, BloomQuality 3, AOQuality 3, shadow/texture-filter tiers
+up. Bloom-off did not restore the chain in the menu.
+
+Two instrument builds (`9e27e7f2`, gated by `20b701e6` after the first
+burned its budget on startup's empty-table refusals) added a bounded
+handoff-chain dump on tone/copy refusals, with creation-bytecode dumps of
+the handoff records. One 30-second main-menu visit produced the whole
+chain (`edvr_gfx_20260926_073622.log`, frame 33455): a plain swizzle copy
+at q=36, the 1920x1080 DoF blur chain at q=66/106, then at q=130 the tone
+slot written by the KNOWN tone VS F9CFC798F21E9AEA with a NEW PS
+DE65BFFF2F12ECC6, then the known copy (20F3/DED879) at q=133, an LDR
+grade/grain composite (20F3/67A1C6A38826030A) at q=140 that runs after
+EDVR's handoff and is benign, and the known panel at q=148.
+
+Bytecode review of the three dumped PS blobs (build/flat-audit-menu): the
+tone variant blends the HDR (t0) with the quarter-res DoF blur (t1) by a
+VS-varying/depth-derived factor, both sampled at unchanged UV; no depth
+texture, no SV_Position, no CB matrix -- the same jitter contract class as
+the stock tone, which is why bloom-off did nothing (the composite is DoF,
+DOFEnabled=2). Its HDR lineage is at PS0, where the stock tone's is at PS1.
+
+Change: the selector admits `kToneDofCompositePs` as an alternate tone PS
+for the same tone VS and routes HDR lineage through the variant's actual
+slot (PS0), with a rig fixture covering selection with HDR at PS0; the
+stock tone's PS1 requirement stays exact. The next menu flight with maxed
+settings should select and treat; what remains open after it is the
+visual qualification of the post-copy composite and motion blur (the
+temporal contract does not reproject via the game's motion blur), plus
+the 1920x1080 chain's blobs if their classification is ever needed.
