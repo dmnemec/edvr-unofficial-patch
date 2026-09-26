@@ -162,6 +162,7 @@ python tools\build_diff.py --self-test || exit /b 1
 python tools\build_receipt.py --self-test || exit /b 1
 python tools\build_lock.py --self-test || exit /b 1
 python tools\flash_patch_residual.py --self-test || exit /b 1
+python tools\gen_mfd_font.py --self-test || exit /b 1
 
 REM The version baked into both DLLs, printed in the second line of every log.
 REM
@@ -2390,4 +2391,22 @@ cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
 if errorlevel 1 ( echo [edvr] ERROR: pixel probe test build failed & exit /b 1 )
 "%OBJ%\pixelprobe\pixel_probe_test.exe" --dry-run || exit /b 1
 "%OBJ%\pixelprobe\pixel_probe_test.exe" --self-test || exit /b 1
+exit /b 0
+
+:rig_mfd_test
+echo [edvr] === mfd_test.exe ===
+if not exist "%OBJ%\mfdtest" mkdir "%OBJ%\mfdtest"
+cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /WX ^
+    /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
+    /Fo"%OBJ%\mfdtest\\" /Fe"%BUILD%\mfd_test.exe" ^
+    "tools\mfd_test\mfd_test.cpp" ^
+    "src\mfd\mfd_provider.cpp" ^
+    "src\mfd\mfd_font.cpp" ^
+    "src\mfd\mfd_renderer.cpp" ^
+    "src\mfd\mfd_gaze_tracker.cpp" ^
+    "src\mfd\mfd_input_router.cpp" ^
+    "src\mfd\mfd_manager.cpp" ^
+    /link /INCREMENTAL:NO
+if errorlevel 1 ( echo [edvr] ERROR: mfd test build failed & exit /b 1 )
+"%BUILD%\mfd_test.exe" || exit /b 1
 exit /b 0
