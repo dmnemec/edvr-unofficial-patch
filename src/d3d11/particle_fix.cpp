@@ -17,11 +17,13 @@
 #include "../common/timing.h"
 #include "binding_shadow.h"   // bindingShaderHash: the bound vertex shader's hash, set with the shader
 #include "exposure_fix.h"   // lookupShaderHash
+#include "explosion_flash_vs.h"
 #include "explosion_vs.h"
 #include "flare_vs.h"
 #include "particle_vs.h"
 #include "shader_swap.h"
 #include "spotlight_flare_vs.h"
+#include "spotlight_pad_vs.h"
 #include "stretched_vs.h"
 
 namespace edvr {
@@ -110,6 +112,8 @@ constexpr uint64_t kWitchspaceStarsVs = 0x9AEC596A2B036EA6ull;
 bool& g_hideWitchspaceStars = detail::g_particleHideStars;
 constexpr uint64_t kExplosionVs = 0x9F4BBCFCD3B68BC9ull;
 constexpr uint64_t kSpotlightFlareVs = 0x78F5F08D02EE38CCull;
+constexpr uint64_t kSpotlightPadVs = 0xBBAD1CA808E1E292ull;
+constexpr uint64_t kExplosionFlashVs = 0x1B285CBC9F185D4Dull;
 
 struct BillboardVariant {
     uint64_t    hash;
@@ -118,7 +122,7 @@ struct BillboardVariant {
     const char* name;      // names the compile in the log
 };
 
-constexpr int kVariantCount = 5;
+constexpr int kVariantCount = 7;
 const BillboardVariant kVariants[kVariantCount] = {
     {kPlumeVs, kParticleWorldVS, sizeof(kParticleWorldVS) - 1,
      "particle_vs"},
@@ -130,15 +134,21 @@ const BillboardVariant kVariants[kVariantCount] = {
      "explosion_vs"},
     {kSpotlightFlareVs, kSpotlightFlareWorldVS, sizeof(kSpotlightFlareWorldVS) - 1,
      "spotlight_flare_vs"},
+    {kSpotlightPadVs, kSpotlightPadWorldVS, sizeof(kSpotlightPadWorldVS) - 1,
+     "spotlight_pad_vs"},
+    {kExplosionFlashVs, kExplosionFlashWorldVS, sizeof(kExplosionFlashWorldVS) - 1,
+     "explosion_flash_vs"},
 };
 // The draw path's inline prefilter (particleOnDrawMayMatch, particle_fix.h)
 // compares against its own copy of these hashes; a variant added here and
 // not there would be silently never offered, so the two lists must agree.
-static_assert(kVariantCount == 5 && detail::kParticleVariantVs[0] == kPlumeVs &&
+static_assert(kVariantCount == 7 && detail::kParticleVariantVs[0] == kPlumeVs &&
                   detail::kParticleVariantVs[1] == kFlareVs &&
                   detail::kParticleVariantVs[2] == kStretchedVs &&
                   detail::kParticleVariantVs[3] == kExplosionVs &&
-                  detail::kParticleVariantVs[4] == kSpotlightFlareVs,
+                  detail::kParticleVariantVs[4] == kSpotlightFlareVs &&
+                  detail::kParticleVariantVs[5] == kSpotlightPadVs &&
+                  detail::kParticleVariantVs[6] == kExplosionFlashVs,
               "particle_fix.h's kParticleVariantVs must list kVariants' hashes in order");
 
 const char* variantLabel(int v) {
@@ -146,6 +156,8 @@ const char* variantLabel(int v) {
     if (v == 2) return "stretched particle";
     if (v == 3) return "explosion";
     if (v == 4) return "light flare";
+    if (v == 5) return "spotlight pad";
+    if (v == 6) return "explosion flash";
     return "smoke plume";
 }
 
@@ -541,8 +553,8 @@ bool particleOnDraw(ID3D11DeviceContext* ctx, char kind, uint32_t count,
     if (boundVs) detail::particleCheckCandidate(boundVs, kind, count, instances);
     const int variant = billboardVariantFor(ctx);
     if (variant < 0) return false;
-    if (variant == 3 && detail::g_explosionMode != Mode::kSteady) return false;
-    if (variant == 4 && detail::g_flareLightMode != Mode::kSteady) return false;
+    if ((variant == 3 || variant == 6) && detail::g_explosionMode != Mode::kSteady) return false;
+    if ((variant == 4 || variant == 5) && detail::g_flareLightMode != Mode::kSteady) return false;
     if (variant < 3 && detail::g_particleMode != Mode::kSteady) return false;
     g_activeVariant = variant;
 
@@ -662,10 +674,11 @@ void particleEnd(ID3D11DeviceContext* ctx) {
         Log::get().note(
             "particle billboard: steady -- %llu draw(s) in the last ten "
             "seconds through the replacement shader (%llu smoke plume, "
-            "%llu solar flare, %llu stretched particle, %llu explosion, %llu light flare), "
+            "%llu solar flare, %llu stretched particle, %llu explosion, %llu light flare, "
+            "%llu spotlight pad, %llu explosion flash), "
             "%llu of them with a solved viewer at "
             "(%.1f %.1f %.1f). Each quad now faces the viewer instead of "
-            "the view axis. A zero in one of the five is not a fault -- it "
+            "the view axis. A zero in one of the seven is not a fault -- it "
             "means you were nowhere near that effect.",
             static_cast<unsigned long long>(g_applied - g_appliedAtNote),
             static_cast<unsigned long long>(g_appliedBy[0]),
@@ -673,6 +686,8 @@ void particleEnd(ID3D11DeviceContext* ctx) {
             static_cast<unsigned long long>(g_appliedBy[2]),
             static_cast<unsigned long long>(g_appliedBy[3]),
             static_cast<unsigned long long>(g_appliedBy[4]),
+            static_cast<unsigned long long>(g_appliedBy[5]),
+            static_cast<unsigned long long>(g_appliedBy[6]),
             static_cast<unsigned long long>(g_facingUsed),
             g_lastFacing[0], g_lastFacing[1], g_lastFacing[2]);
         g_noteMs = now;
