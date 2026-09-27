@@ -3546,7 +3546,7 @@ void menuConfigure(Config& cfg) {
     s.tooltipsWere = s.tooltipDelayS > 0.0f;
     s.toasts = cfg.getBool("menu.toasts", true);
     {
-        const bool ov = cfg.getBool("menu.fps_overlay", false);
+        const bool ov = cfg.getBool("menu.fps_overlay", false) || cfg.getBool("fix.mfd_hud_debug", false);
         const bool ovLock = cfg.getBool("menu.fps_overlay_lock", false);
         float yaw = cfg.getFloat("menu.fps_overlay_yaw", 0.0f);
         float pitch = cfg.getFloat("menu.fps_overlay_pitch", 20.0f);

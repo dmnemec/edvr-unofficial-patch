@@ -503,6 +503,7 @@ XrResult D3D11Stereo::renderCaptured(const XrView (&views)[2],XrSpace space,cons
     drawContext->UpdateSubresource(blitConstants_.Get(),0,nullptr,&constants[i],0,0);drawContext->Draw(3,0);
 
     // Cockpit MFD Overlay pass
+    edvr::Config::get().reloadIfChanged();
     if (edvr::mfd::MfdManager::instance().isEnabled()) {
       if (i == 0) {
         const auto& hPose = views[0].pose;
@@ -514,16 +515,9 @@ XrResult D3D11Stereo::renderCaptured(const XrView (&views)[2],XrSpace space,cons
 
         auto* focused = edvr::mfd::MfdManager::instance().focusedSlot();
         if (focused && focused->provider) {
-          edvr::mfd::MfdManager::instance().inputRouter().processInput(
+          edvr::mfd::MfdManager::instance().inputRouter().pollAndRoute(
             true, focused->provider.get(),
-            (GetAsyncKeyState(VK_UP) & 0x8000) != 0,
-            (GetAsyncKeyState(VK_DOWN) & 0x8000) != 0,
-            (GetAsyncKeyState(VK_LEFT) & 0x8000) != 0,
-            (GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0,
-            (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0,
-            (GetAsyncKeyState(VK_BACK) & 0x8000) != 0,
-            (GetAsyncKeyState(VK_PRIOR) & 0x8000) != 0,
-            (GetAsyncKeyState(VK_NEXT) & 0x8000) != 0
+            [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
           );
         }
 
