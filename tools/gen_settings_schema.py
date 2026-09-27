@@ -117,7 +117,7 @@ UI_RE = re.compile(r'^ui\s*:\s*(.*)$', re.I)
 DEV_RE = re.compile(r'^dev\s*:\s*(.*)$', re.I)
 # The sections the menu's developer tier lists in full.
 DEV_SECTIONS = ('advanced', 'experimental')
-MENU_PAGES = ('fixes', 'performance')
+MENU_PAGES = ('fixes', 'performance', 'mfd')
 # A heading in edvr.ini: a rule, the title, a rule. The heading a person
 # reads in the file is the heading the window shows, so there is no second
 # list of group names to keep in step with this one.

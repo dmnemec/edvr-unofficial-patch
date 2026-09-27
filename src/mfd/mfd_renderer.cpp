@@ -153,36 +153,45 @@ void MfdRenderer::drawTextRight(int rightX, int y, const std::string& text, MfdC
     drawText(rightX - textW, y, text, color, scale);
 }
 
-void MfdRenderer::render(const MfdViewModel& model) {
-    // 1. Dark translucent cockpit glass background
-    clear(palette::kBackground);
+void MfdRenderer::render(const MfdViewModel& model, float backgroundOpacity) {
+    // 1. Translucent dark cockpit glass background
+    uint8_t bgAlpha = static_cast<uint8_t>(std::clamp(backgroundOpacity, 0.0f, 1.0f) * 255.0f);
+    MfdColor bgColor(10, 12, 16, bgAlpha);
+    clear(bgColor);
 
-    // Subtle cathode scanlines
-    drawScanlines(MfdColor(8, 6, 4, 180), 3);
+    if (bgAlpha > 20) {
+        // Subtle cathode scanlines
+        drawScanlines(MfdColor(5, 6, 8, static_cast<uint8_t>(bgAlpha * 0.75f)), 3);
+    }
 
     // Color theme based on focus state:
     MfdColor mainColor = model.isFocused ? palette::kAmberBright : palette::kAmberNormal;
     MfdColor dimColor = model.isFocused ? palette::kAmberNormal : palette::kAmberDim;
     MfdColor borderColor = model.isFocused ? palette::kAmberBright : palette::kFrameBorder;
 
-    // 2. Outer chamfered cockpit frame:
-    int margin = 6;
-    int chamfer = 16;
+    // 2. Outer cockpit bezel frame and corner brackets:
+    int margin = 4;
     int w = m_width - margin * 2;
     int h = m_height - margin * 2;
+    int bracketLen = 18;
 
-    // Outer frame with angled top-right corner
-    drawLine(margin, margin, margin + w - chamfer, margin, borderColor);
-    drawLine(margin + w - chamfer, margin, margin + w, margin + chamfer, borderColor);
-    drawLine(margin + w, margin + chamfer, margin + w, margin + h, borderColor);
-    drawLine(margin + w, margin + h, margin, margin + h, borderColor);
-    drawLine(margin, margin + h, margin, margin, borderColor);
+    // Corner brackets (Elite HUD styling)
+    // Top-left
+    drawLine(margin, margin, margin + bracketLen, margin, borderColor);
+    drawLine(margin, margin, margin, margin + bracketLen, borderColor);
+    // Top-right
+    drawLine(margin + w - bracketLen, margin, margin + w, margin, borderColor);
+    drawLine(margin + w, margin, margin + w, margin + bracketLen, borderColor);
+    // Bottom-left
+    drawLine(margin, margin + h - bracketLen, margin, margin + h, borderColor);
+    drawLine(margin, margin + h, margin + bracketLen, margin + h, borderColor);
+    // Bottom-right
+    drawLine(margin + w - bracketLen, margin + h, margin + w, margin + h, borderColor);
+    drawLine(margin + w, margin + h - bracketLen, margin + w, margin + h, borderColor);
 
-    // Corner tick marks
-    drawLine(margin, margin + 4, margin + 8, margin + 4, borderColor);
-    drawLine(margin + 4, margin, margin + 4, margin + 8, borderColor);
-    drawLine(margin + w - 4, margin + h, margin + w - 4, margin + h - 8, borderColor);
-    drawLine(margin + w, margin + h - 4, margin + w - 8, margin + h - 4, borderColor);
+    // Subtle frame perimeter
+    MfdColor faintBorder(borderColor.r, borderColor.g, borderColor.b, 80);
+    drawRect(margin, margin, w, h, faintBorder);
 
     // 3. Render Header
     renderHeader(model, mainColor, dimColor);

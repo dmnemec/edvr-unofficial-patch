@@ -1416,6 +1416,13 @@ void buildPages() {
     }
     {
         Page p;
+        p.name = "MFD";
+        addSettingRows(p, MenuTier::Fix, "mfd", true);
+        firstSelectable(p);
+        s.pages.push_back(p);
+    }
+    {
+        Page p;
         p.name = "Monitor";
         p.status = true;
         p.monitor = true;

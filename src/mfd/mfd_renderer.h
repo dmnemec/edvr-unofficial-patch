@@ -25,7 +25,7 @@ public:
     void resize(int width, int height);
 
     // Render the complete view model onto the internal pixel buffer.
-    void render(const MfdViewModel& model);
+    void render(const MfdViewModel& model, float backgroundOpacity = 0.75f);
 
     // D3D11 Shader Resource View helper for rendering onto eye swapchains:
     void createOrUpdateD3D11Srv(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11ShaderResourceView** outSrv);
