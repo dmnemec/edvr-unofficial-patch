@@ -40,7 +40,7 @@ public:
     // Lifecycle
     bool initialize(int renderWidth = 512, int renderHeight = 384);
     void shutdown();
-    bool isEnabled() const { return m_enabled; }
+    bool isEnabled() const;
     void setEnabled(bool enabled) { m_enabled = enabled; }
 
     // Slot management
@@ -80,6 +80,15 @@ public:
         bool inFrustum = false;
     };
     const DebugStats& debugStats() const { return m_debugStats; }
+
+    // Cross-DLL shared telemetry (between openvr_api.dll and d3d11.dll)
+    static void publishSharedTelemetry(uint32_t draws, int focusState, bool inFrustum,
+                                       float eyeX, float eyeY, float eyeZ,
+                                       float screenX, float screenY, float screenW, float screenH);
+    static bool readSharedTelemetry(uint32_t* draws, int* focusState, bool* inFrustum,
+                                    float* eyeX, float* eyeY, float* eyeZ,
+                                    float* screenX = nullptr, float* screenY = nullptr,
+                                    float* screenW = nullptr, float* screenH = nullptr);
 
     // Compositor access (Option A: OpenXR Quad layer, Option B: D3D11 scene mesh)
     IMfdCompositor* compositor() { return m_compositor.get(); }

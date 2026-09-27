@@ -1,5 +1,6 @@
 #include "d3d11_stereo.h"
 #include "../mfd/mfd_manager.h"
+#include "../common/config.h"
 #include "projection_math.h"
 #include <d3dcompiler.h>
 #include <chrono>
@@ -310,6 +311,7 @@ XrResult D3D11Stereo::initialize(const StereoDispatch& d,XrSession session,ID3D1
   D3D11_RASTERIZER_DESC raster{};raster.FillMode=D3D11_FILL_SOLID;raster.CullMode=D3D11_CULL_NONE;raster.DepthClipEnable=TRUE;
   D3D11_DEPTH_STENCIL_DESC depth{};depth.DepthEnable=FALSE;
   if(FAILED(device->CreateRasterizerState(&raster,&rasterizer_))||FAILED(device->CreateDepthStencilState(&depth,&depth_)))return failed(XR_ERROR_RUNTIME_FAILURE);
+  edvr::Config::get().init(edvr::executableDirectory());
   edvr::mfd::MfdManager::instance().initialize();
   ready_=true;return XR_SUCCESS;
 }

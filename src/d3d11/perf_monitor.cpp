@@ -1356,12 +1356,19 @@ void perfMonitorOverlayLine(char* buf, size_t bufLen) {
             perfFpsOf(ps.avgMs), gpuValue, nativeCpuPreSubmit(s.nativeHistory) ? "cpu (pre-submit)" : "cpu",
             cpuValue);
         if (Config::get().getBool("fix.mfd_hud_debug", false)) {
-            auto& mfd = edvr::mfd::MfdManager::instance();
-            const auto& stats = mfd.debugStats();
+            uint32_t draws = 0;
+            int focusState = 0;
+            bool inFrustum = false;
+            float eyeX = 0, eyeY = 0, eyeZ = 0;
+            bool haveShared = edvr::mfd::MfdManager::readSharedTelemetry(&draws, &focusState, &inFrustum, &eyeX, &eyeY, &eyeZ);
             char mfdBuf[128];
-            snprintf(mfdBuf, sizeof(mfdBuf), "   MFD: %s draws %u eye(%.2f,%.2f,%.2f)",
-                     stats.inFrustum ? "vis" : "culled", stats.renderDraws,
-                     stats.eyeLocalX, stats.eyeLocalY, stats.eyeLocalZ);
+            if (haveShared) {
+                const char* gazeStr = (focusState == 2) ? "focused" : (focusState == 1 ? "hover" : "idle");
+                snprintf(mfdBuf, sizeof(mfdBuf), "   MFD: %s draws %u eye(%.2f,%.2f,%.2f)%s",
+                         gazeStr, draws, eyeX, eyeY, eyeZ, inFrustum ? "" : " [culled]");
+            } else {
+                snprintf(mfdBuf, sizeof(mfdBuf), "   MFD: waiting for OpenXR...");
+            }
             size_t cur = strlen(buf);
             if (cur + strlen(mfdBuf) < bufLen) strcat(buf, mfdBuf);
         }
@@ -1380,12 +1387,19 @@ void perfMonitorOverlayLine(char* buf, size_t bufLen) {
     }
     snprintf(buf, bufLen, "%.0f fps%s", perfFpsOf(ps.avgMs), times);
     if (Config::get().getBool("fix.mfd_hud_debug", false)) {
-        auto& mfd = edvr::mfd::MfdManager::instance();
-        const auto& stats = mfd.debugStats();
+        uint32_t draws = 0;
+        int focusState = 0;
+        bool inFrustum = false;
+        float eyeX = 0, eyeY = 0, eyeZ = 0;
+        bool haveShared = edvr::mfd::MfdManager::readSharedTelemetry(&draws, &focusState, &inFrustum, &eyeX, &eyeY, &eyeZ);
         char mfdBuf[128];
-        snprintf(mfdBuf, sizeof(mfdBuf), "   MFD: %s draws %u eye(%.2f,%.2f,%.2f)",
-                 stats.inFrustum ? "vis" : "culled", stats.renderDraws,
-                 stats.eyeLocalX, stats.eyeLocalY, stats.eyeLocalZ);
+        if (haveShared) {
+            const char* gazeStr = (focusState == 2) ? "focused" : (focusState == 1 ? "hover" : "idle");
+            snprintf(mfdBuf, sizeof(mfdBuf), "   MFD: %s draws %u eye(%.2f,%.2f,%.2f)%s",
+                     gazeStr, draws, eyeX, eyeY, eyeZ, inFrustum ? "" : " [culled]");
+        } else {
+            snprintf(mfdBuf, sizeof(mfdBuf), "   MFD: waiting for OpenXR...");
+        }
         size_t cur = strlen(buf);
         if (cur + strlen(mfdBuf) < bufLen) strcat(buf, mfdBuf);
     }

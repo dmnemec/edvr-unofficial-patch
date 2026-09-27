@@ -20,6 +20,71 @@ struct XrFovf { float angleLeft, angleRight, angleUp, angleDown; };
 
 namespace edvr::mfd {
 
+namespace {
+struct MfdSharedState {
+    volatile LONG initialized;
+    volatile LONG draws;
+    volatile LONG focusState;
+    volatile LONG inFrustum;
+    volatile LONG eyeX_mm;
+    volatile LONG eyeY_mm;
+    volatile LONG eyeZ_mm;
+    volatile LONG screenX;
+    volatile LONG screenY;
+    volatile LONG screenW;
+    volatile LONG screenH;
+};
+
+MfdSharedState* getMfdSharedState() {
+    static MfdSharedState* s_shared = nullptr;
+    if (s_shared) return s_shared;
+
+    wchar_t name[64];
+    swprintf_s(name, L"Local\\edvr_mfd_telemetry_v1_%lu", GetCurrentProcessId());
+    HANDLE hMap = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(MfdSharedState), name);
+    if (!hMap) return nullptr;
+
+    s_shared = static_cast<MfdSharedState*>(MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(MfdSharedState)));
+    return s_shared;
+}
+} // namespace
+
+void MfdManager::publishSharedTelemetry(uint32_t draws, int focusState, bool inFrustum,
+                                       float eyeX, float eyeY, float eyeZ,
+                                       float screenX, float screenY, float screenW, float screenH) {
+    MfdSharedState* s = getMfdSharedState();
+    if (!s) return;
+    InterlockedExchange(&s->initialized, 1);
+    InterlockedExchange(&s->draws, static_cast<LONG>(draws));
+    InterlockedExchange(&s->focusState, static_cast<LONG>(focusState));
+    InterlockedExchange(&s->inFrustum, inFrustum ? 1 : 0);
+    InterlockedExchange(&s->eyeX_mm, static_cast<LONG>(std::round(eyeX * 1000.0f)));
+    InterlockedExchange(&s->eyeY_mm, static_cast<LONG>(std::round(eyeY * 1000.0f)));
+    InterlockedExchange(&s->eyeZ_mm, static_cast<LONG>(std::round(eyeZ * 1000.0f)));
+    InterlockedExchange(&s->screenX, static_cast<LONG>(std::round(screenX)));
+    InterlockedExchange(&s->screenY, static_cast<LONG>(std::round(screenY)));
+    InterlockedExchange(&s->screenW, static_cast<LONG>(std::round(screenW)));
+    InterlockedExchange(&s->screenH, static_cast<LONG>(std::round(screenH)));
+}
+
+bool MfdManager::readSharedTelemetry(uint32_t* draws, int* focusState, bool* inFrustum,
+                                    float* eyeX, float* eyeY, float* eyeZ,
+                                    float* screenX, float* screenY, float* screenW, float* screenH) {
+    MfdSharedState* s = getMfdSharedState();
+    if (!s || InterlockedCompareExchange(&s->initialized, 0, 0) == 0) return false;
+    if (draws) *draws = static_cast<uint32_t>(InterlockedCompareExchange(&s->draws, 0, 0));
+    if (focusState) *focusState = static_cast<int>(InterlockedCompareExchange(&s->focusState, 0, 0));
+    if (inFrustum) *inFrustum = (InterlockedCompareExchange(&s->inFrustum, 0, 0) != 0);
+    if (eyeX) *eyeX = static_cast<float>(InterlockedCompareExchange(&s->eyeX_mm, 0, 0)) / 1000.0f;
+    if (eyeY) *eyeY = static_cast<float>(InterlockedCompareExchange(&s->eyeY_mm, 0, 0)) / 1000.0f;
+    if (eyeZ) *eyeZ = static_cast<float>(InterlockedCompareExchange(&s->eyeZ_mm, 0, 0)) / 1000.0f;
+    if (screenX) *screenX = static_cast<float>(InterlockedCompareExchange(&s->screenX, 0, 0));
+    if (screenY) *screenY = static_cast<float>(InterlockedCompareExchange(&s->screenY, 0, 0));
+    if (screenW) *screenW = static_cast<float>(InterlockedCompareExchange(&s->screenW, 0, 0));
+    if (screenH) *screenH = static_cast<float>(InterlockedCompareExchange(&s->screenH, 0, 0));
+    return true;
+}
+
 MfdManager& MfdManager::instance() {
     static MfdManager s_instance;
     return s_instance;
@@ -83,10 +148,15 @@ void MfdManager::ensureDefaultSlots() {
     addSlot("main_mfd", std::move(providerCenter), poseCenter);
 }
 
+bool MfdManager::isEnabled() const {
+    return m_enabled || edvr::Config::get().getBool("fix.cockpit_mfd", false);
+}
+
 bool MfdManager::initialize(int renderWidth, int renderHeight) {
     m_renderWidth = renderWidth;
     m_renderHeight = renderHeight;
 
+    edvr::Config::get().init(edvr::executableDirectory());
     ensureDefaultSlots();
     m_enabled = edvr::Config::get().getBool("fix.cockpit_mfd", false);
 
@@ -134,8 +204,25 @@ MfdSlot* MfdManager::focusedSlot() {
 }
 
 void MfdManager::update(const Vec3& headPos, const Vec3& headForward, float dtSeconds) {
-    if (!m_enabled) return;
+    edvr::Config::get().reloadIfChanged();
+    if (!isEnabled()) return;
     ensureDefaultSlots();
+
+    // Live update main MFD slot transform from config settings
+    float posX = edvr::Config::get().getFloat("fix.mfd_pos_x", 0.0f);
+    float posY = edvr::Config::get().getFloat("fix.mfd_pos_y", -0.16f);
+    float posZ = edvr::Config::get().getFloat("fix.mfd_pos_z", -0.55f);
+    float pitchDeg = edvr::Config::get().getFloat("fix.mfd_pitch", -20.0f);
+    float yawDeg = edvr::Config::get().getFloat("fix.mfd_yaw", 0.0f);
+    float scale = edvr::Config::get().getFloat("fix.mfd_scale", 1.0f);
+
+    auto* mainSlot = findSlot("main_mfd");
+    if (mainSlot) {
+        mainSlot->pose.position = Vec3(posX, posY, posZ);
+        mainSlot->pose.orientation = Quat::fromEulerDegrees(pitchDeg, yawDeg, 0.0f);
+        mainSlot->pose.widthM = 0.28f * (scale > 0.1f ? scale : 1.0f);
+        mainSlot->pose.heightM = 0.18f * (scale > 0.1f ? scale : 1.0f);
+    }
 
     for (auto& slot : m_slots) {
         if (!slot.isVisible || !slot.provider) continue;
@@ -157,7 +244,7 @@ void MfdManager::update(const Vec3& headPos, const Vec3& headForward, float dtSe
 }
 
 void MfdManager::render() {
-    if (!m_enabled) return;
+    if (!isEnabled()) return;
     ensureDefaultSlots();
 
     for (auto& slot : m_slots) {
@@ -182,7 +269,7 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
                                 uint32_t viewportWidth, uint32_t viewportHeight,
                                 ID3D11VertexShader* vs, ID3D11PixelShader* ps,
                                 ID3D11SamplerState* sampler, ID3D11Buffer* constantsBuffer) {
-    if (!m_enabled || m_slots.empty() || !device || !context || !rtv || !vs || !ps || !sampler) return;
+    if (!isEnabled() || m_slots.empty() || !device || !context || !rtv || !vs || !ps || !sampler) return;
     if (viewportWidth == 0 || viewportHeight == 0) return;
 
     bool headLocked = edvr::Config::get().getBool("fix.mfd_head_locked", false);
@@ -260,6 +347,15 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
 
         m_debugStats.inFrustum = true;
         m_debugStats.renderDraws++;
+
+        int focusStateInt = 0;
+        auto* focused = focusedSlot();
+        if (focused) {
+            focusStateInt = (focused->gazeTracker.currentState() == MfdFocusState::kFocused) ? 2 : 1;
+        }
+        publishSharedTelemetry(m_debugStats.renderDraws, focusStateInt, m_debugStats.inFrustum,
+                               m_debugStats.eyeLocalX, m_debugStats.eyeLocalY, m_debugStats.eyeLocalZ,
+                               m_debugStats.screenX, m_debugStats.screenY, m_debugStats.screenW, m_debugStats.screenH);
 
         ID3D11ShaderResourceView* mfdSrv = nullptr;
         slot.renderer->createOrUpdateD3D11Srv(device, context, &mfdSrv);
