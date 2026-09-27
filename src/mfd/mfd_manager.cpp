@@ -265,38 +265,6 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
         slot.renderer->createOrUpdateD3D11Srv(device, context, &mfdSrv);
         if (!mfdSrv) continue;
 
-        // Save current context state to ensure complete restoration
-        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> origRtv;
-        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> origDsv;
-        context->OMGetRenderTargets(1, &origRtv, &origDsv);
-
-        Microsoft::WRL::ComPtr<ID3D11BlendState> origBlend;
-        FLOAT origBlendFactor[4]{}; UINT origSampleMask = 0;
-        context->OMGetBlendState(&origBlend, origBlendFactor, &origSampleMask);
-
-        Microsoft::WRL::ComPtr<ID3D11DepthStencilState> origDepth;
-        UINT origStencilRef = 0;
-        context->OMGetDepthStencilState(&origDepth, &origStencilRef);
-
-        D3D11_VIEWPORT origVp{}; UINT numVp = 1;
-        context->RSGetViewports(&numVp, &origVp);
-
-        Microsoft::WRL::ComPtr<ID3D11VertexShader> origVs;
-        context->VSGetShader(&origVs, nullptr, nullptr);
-        Microsoft::WRL::ComPtr<ID3D11PixelShader> origPs;
-        context->PSGetShader(&origPs, nullptr, nullptr);
-
-        Microsoft::WRL::ComPtr<ID3D11SamplerState> origSampler;
-        context->PSGetSamplers(0, 1, &origSampler);
-
-        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> origSrv;
-        context->PSGetShaderResources(0, 1, &origSrv);
-
-        Microsoft::WRL::ComPtr<ID3D11Buffer> origPsCb;
-        context->PSGetConstantBuffers(0, 1, &origPsCb);
-        Microsoft::WRL::ComPtr<ID3D11Buffer> origVsCb;
-        context->VSGetConstantBuffers(0, 1, &origVsCb);
-
         // Bind viewport for MFD overlay
         D3D11_VIEWPORT vp{};
         vp.TopLeftX = std::max(0.0f, vx);
@@ -318,36 +286,12 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
         cb.clampUV[0] = 0.0f; cb.clampUV[1] = 0.0f; cb.clampUV[2] = 1.0f; cb.clampUV[3] = 1.0f;
         cb.encodeSRGB = 1.0f;
 
-        Microsoft::WRL::ComPtr<ID3D11Buffer> mfdCb;
-        D3D11_BUFFER_DESC cbd{}; cbd.ByteWidth = sizeof(cb); cbd.Usage = D3D11_USAGE_DEFAULT; cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        D3D11_SUBRESOURCE_DATA cbdData{ &cb, 0, 0 };
-        if (SUCCEEDED(device->CreateBuffer(&cbd, &cbdData, &mfdCb))) {
-            context->PSSetConstantBuffers(0, 1, mfdCb.GetAddressOf());
-        } else if (constantsBuffer) {
+        if (constantsBuffer) {
             context->UpdateSubresource(constantsBuffer, 0, nullptr, &cb, 0, 0);
             context->PSSetConstantBuffers(0, 1, &constantsBuffer);
         }
 
         context->Draw(3, 0);
-
-        // Restore context state exactly
-        ID3D11ShaderResourceView* origSrvPtr = origSrv.Get();
-        context->PSSetShaderResources(0, 1, &origSrvPtr);
-        ID3D11SamplerState* origSamplerPtr = origSampler.Get();
-        context->PSSetSamplers(0, 1, &origSamplerPtr);
-        ID3D11Buffer* origPsCbPtr = origPsCb.Get();
-        context->PSSetConstantBuffers(0, 1, &origPsCbPtr);
-        ID3D11Buffer* origVsCbPtr = origVsCb.Get();
-        context->VSSetConstantBuffers(0, 1, &origVsCbPtr);
-        context->VSSetShader(origVs.Get(), nullptr, 0);
-        context->PSSetShader(origPs.Get(), nullptr, 0);
-        context->OMSetBlendState(origBlend.Get(), origBlendFactor, origSampleMask);
-        context->OMSetDepthStencilState(origDepth.Get(), origStencilRef);
-        ID3D11RenderTargetView* origRtvPtr = origRtv.Get();
-        context->OMSetRenderTargets(1, &origRtvPtr, origDsv.Get());
-        if (numVp > 0) {
-            context->RSSetViewports(1, &origVp);
-        }
     }
 }
 

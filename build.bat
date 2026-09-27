@@ -845,7 +845,9 @@ cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     "src\common\vtable_hook.cpp" "src\common\code_hook.cpp" "src\common\hotkey.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
     "src\common\guard.cpp" "src\common\frame_flag.cpp" "src\common\proxy.cpp" ^
-    /link /INCREMENTAL:NO kernel32.lib user32.lib gdi32.lib version.lib dxgi.lib d3dcompiler.lib
+    "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
+    "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp" ^
+    /link /INCREMENTAL:NO kernel32.lib user32.lib gdi32.lib version.lib dxgi.lib d3dcompiler.lib d3d11.lib
 if errorlevel 1 ( echo [edvr] ERROR: native menu test build failed & exit /b 1 )
 "%BUILD%\native_menu_test.exe" --dry-run || exit /b 1
 "%BUILD%\native_menu_test.exe" --self-test || exit /b 1
