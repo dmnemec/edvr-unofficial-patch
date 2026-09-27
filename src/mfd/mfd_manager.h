@@ -72,6 +72,15 @@ public:
     // Input routing
     MfdInputRouter& inputRouter() { return m_inputRouter; }
 
+    // Debug & diagnostic stats
+    struct DebugStats {
+        float eyeLocalX = 0.0f, eyeLocalY = 0.0f, eyeLocalZ = 0.0f;
+        float screenX = 0.0f, screenY = 0.0f, screenW = 0.0f, screenH = 0.0f;
+        uint32_t renderDraws = 0;
+        bool inFrustum = false;
+    };
+    const DebugStats& debugStats() const { return m_debugStats; }
+
     // Compositor access (Option A: OpenXR Quad layer, Option B: D3D11 scene mesh)
     IMfdCompositor* compositor() { return m_compositor.get(); }
     void setCompositor(std::unique_ptr<IMfdCompositor> compositor) {
@@ -82,6 +91,7 @@ private:
     bool m_enabled = false;
     int m_renderWidth = 512;
     int m_renderHeight = 384;
+    DebugStats m_debugStats;
 
     std::vector<MfdSlot> m_slots;
     MfdInputRouter m_inputRouter;

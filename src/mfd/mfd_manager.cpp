@@ -36,15 +36,22 @@ MfdManager::~MfdManager() {
 void MfdManager::ensureDefaultSlots() {
     if (!m_slots.empty()) return;
 
-    // Slot 1: Lower-right console (default MFD)
-    MfdPose poseRight;
-    poseRight.position = Vec3(0.24f, -0.22f, -0.50f);
-    poseRight.orientation = Quat::fromEulerDegrees(-25.0f, -15.0f, 0.0f);
-    poseRight.widthM = 0.24f;
-    poseRight.heightM = 0.16f;
+    // Center/forward console MFD (default MFD)
+    float posX = edvr::Config::get().getFloat("fix.mfd_pos_x", 0.0f);
+    float posY = edvr::Config::get().getFloat("fix.mfd_pos_y", -0.16f);
+    float posZ = edvr::Config::get().getFloat("fix.mfd_pos_z", -0.55f);
+    float pitchDeg = edvr::Config::get().getFloat("fix.mfd_pitch", -20.0f);
+    float yawDeg = edvr::Config::get().getFloat("fix.mfd_yaw", 0.0f);
+    float scale = edvr::Config::get().getFloat("fix.mfd_scale", 1.0f);
 
-    auto providerRight = std::make_unique<DeclarativeMfdProvider>("right_console", "SPANSH ROUTER");
-    providerRight->loadFromJson(R"({
+    MfdPose poseCenter;
+    poseCenter.position = Vec3(posX, posY, posZ);
+    poseCenter.orientation = Quat::fromEulerDegrees(pitchDeg, yawDeg, 0.0f);
+    poseCenter.widthM = 0.28f * (scale > 0.1f ? scale : 1.0f);
+    poseCenter.heightM = 0.18f * (scale > 0.1f ? scale : 1.0f);
+
+    auto providerCenter = std::make_unique<DeclarativeMfdProvider>("main_mfd", "SPANSH ROUTER");
+    providerCenter->loadFromJson(R"({
         "title": "SPANSH NEUTRON ROUTER",
         "subtitle": "WAYPOINT 2 OF 14",
         "statusBadge": "ONLINE",
@@ -73,7 +80,7 @@ void MfdManager::ensureDefaultSlots() {
         ]
     })");
 
-    addSlot("right_console", std::move(providerRight), poseRight);
+    addSlot("main_mfd", std::move(providerCenter), poseCenter);
 }
 
 bool MfdManager::initialize(int renderWidth, int renderHeight) {
@@ -175,48 +182,84 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
                                 uint32_t viewportWidth, uint32_t viewportHeight,
                                 ID3D11VertexShader* vs, ID3D11PixelShader* ps,
                                 ID3D11SamplerState* sampler, ID3D11Buffer* constantsBuffer) {
-    if (!m_enabled || m_slots.empty() || !device || !context || !rtv) return;
+    if (!m_enabled || m_slots.empty() || !device || !context || !rtv || !vs || !ps || !sampler) return;
+    if (viewportWidth == 0 || viewportHeight == 0) return;
 
+    bool headLocked = edvr::Config::get().getBool("fix.mfd_head_locked", false);
     Vec3 eyePos(eyePose.position.x, eyePose.position.y, eyePose.position.z);
     Quat eyeRot(eyePose.orientation.x, eyePose.orientation.y, eyePose.orientation.z, eyePose.orientation.w);
 
     for (auto& slot : m_slots) {
         if (!slot.isVisible || !slot.renderer) continue;
 
-        // Transform MFD position to eye-local space:
-        Vec3 relPos = slot.pose.position - eyePos;
-        Quat invEyeRot(-eyeRot.x, -eyeRot.y, -eyeRot.z, eyeRot.w);
-        Vec3 eyeLocal = invEyeRot.rotate(relPos);
+        Vec3 eyeLocal;
+        if (headLocked) {
+            // In head-locked HUD mode, position is relative to current gaze direction
+            eyeLocal = slot.pose.position;
+        } else {
+            // Transform MFD cockpit position to eye-local space
+            Vec3 relPos = slot.pose.position - eyePos;
+            Quat invEyeRot(-eyeRot.x, -eyeRot.y, -eyeRot.z, eyeRot.w);
+            eyeLocal = invEyeRot.rotate(relPos);
+        }
+
+        m_debugStats.eyeLocalX = eyeLocal.x;
+        m_debugStats.eyeLocalY = eyeLocal.y;
+        m_debugStats.eyeLocalZ = eyeLocal.z;
 
         // Must be in front of the eye (-Z in OpenXR eye space)
-        if (eyeLocal.z >= -0.05f) continue;
+        if (eyeLocal.z >= -0.05f) {
+            m_debugStats.inFrustum = false;
+            continue;
+        }
 
         float zDist = -eyeLocal.z; // positive distance forward
 
         float tanX = eyeLocal.x / zDist;
         float tanY = eyeLocal.y / zDist;
 
-        float fovW = eyeFov.angleRight - eyeFov.angleLeft;
-        float fovH = eyeFov.angleUp - eyeFov.angleDown;
-        if (fovW <= 1e-4f || fovH <= 1e-4f) continue;
+        float tanLeft = std::tan(eyeFov.angleLeft);
+        float tanRight = std::tan(eyeFov.angleRight);
+        float tanUp = std::tan(eyeFov.angleUp);
+        float tanDown = std::tan(eyeFov.angleDown);
+        float tanW = tanRight - tanLeft;
+        float tanH = tanUp - tanDown;
+        if (tanW <= 1e-4f || tanH <= 1e-4f) {
+            m_debugStats.inFrustum = false;
+            continue;
+        }
 
-        float normX = (tanX - eyeFov.angleLeft) / fovW;
-        float normY = (eyeFov.angleUp - tanY) / fovH;
+        float normX = (tanX - tanLeft) / tanW;
+        float normY = (tanUp - tanY) / tanH;
 
         float cx = normX * static_cast<float>(viewportWidth);
         float cy = normY * static_cast<float>(viewportHeight);
 
-        float pixW = (slot.pose.widthM / zDist) / fovW * static_cast<float>(viewportWidth);
-        float pixH = (slot.pose.heightM / zDist) / fovH * static_cast<float>(viewportHeight);
+        float pixW = (slot.pose.widthM / zDist) / tanW * static_cast<float>(viewportWidth);
+        float pixH = (slot.pose.heightM / zDist) / tanH * static_cast<float>(viewportHeight);
 
-        if (pixW < 10.0f || pixH < 10.0f) continue;
+        m_debugStats.screenX = cx;
+        m_debugStats.screenY = cy;
+        m_debugStats.screenW = pixW;
+        m_debugStats.screenH = pixH;
+
+        if (pixW < 10.0f || pixH < 10.0f) {
+            m_debugStats.inFrustum = false;
+            continue;
+        }
 
         float vx = cx - pixW * 0.5f;
         float vy = cy - pixH * 0.5f;
 
         // Clip to viewport bounds
         if (vx + pixW < 0 || vx >= static_cast<float>(viewportWidth) ||
-            vy + pixH < 0 || vy >= static_cast<float>(viewportHeight)) continue;
+            vy + pixH < 0 || vy >= static_cast<float>(viewportHeight)) {
+            m_debugStats.inFrustum = false;
+            continue;
+        }
+
+        m_debugStats.inFrustum = true;
+        m_debugStats.renderDraws++;
 
         ID3D11ShaderResourceView* mfdSrv = nullptr;
         slot.renderer->createOrUpdateD3D11Srv(device, context, &mfdSrv);

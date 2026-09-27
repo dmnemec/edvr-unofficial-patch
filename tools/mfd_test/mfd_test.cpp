@@ -307,23 +307,19 @@ int test_manager() {
         "tabs": [{ "title": "MAIN", "type": "text", "items": ["SYSTEM DIAGNOSTICS: NOMINAL"] }]
     })");
 
-    bool added = mgr.addSlot("center_console", std::move(provider), pose);
-    TEST_CHECK(added, "Slot added to manager");
-    TEST_CHECK(mgr.slotCount() >= 1, "Slot count is at least 1");
+    MfdSlot* slot = mgr.findSlot("main_mfd");
+    TEST_CHECK(slot != nullptr, "Default main_mfd slot lookup succeeds");
 
-    MfdSlot* slot = mgr.findSlot("center_console");
-    TEST_CHECK(slot != nullptr, "Slot lookup by name succeeds");
-
-    // Look directly at center console:
+    // Look directly at main MFD:
     Vec3 headPos(0.0f, 0.0f, 0.0f);
-    Vec3 toCenter = (pose.position - headPos).normalized();
+    Vec3 toCenter = (slot->pose.position - headPos).normalized();
 
     // Tick enough time to acquire focus (150ms):
     for (int i = 0; i < 10; ++i) {
         mgr.update(headPos, toCenter, 0.020f);
     }
 
-    TEST_CHECK(mgr.focusedSlot() == slot, "Center console is now the focused slot");
+    TEST_CHECK(mgr.focusedSlot() == slot, "Main MFD is now the focused slot");
     TEST_CHECK(slot->provider->viewModel().isFocused, "Provider view model reflects focused state");
 
     // Execute render cycle

@@ -1623,15 +1623,14 @@ void buildStatus(MenuContent& c) {
             statusLine(c, "Cockpit MFD", "off (fix.cockpit_mfd = 0)");
         } else {
             auto& mfd = edvr::mfd::MfdManager::instance();
+            const auto& stats = mfd.debugStats();
             auto* focused = mfd.focusedSlot();
-            if (focused) {
-                snprintf(buf, sizeof(buf), "active (%zu slot%s, focused: %s, gaze: ON)",
-                         mfd.slotCount(), mfd.slotCount() == 1 ? "" : "s",
-                         focused->name.c_str());
-            } else {
-                snprintf(buf, sizeof(buf), "active (%zu slot%s, gaze: idle)",
-                         mfd.slotCount(), mfd.slotCount() == 1 ? "" : "s");
-            }
+            snprintf(buf, sizeof(buf), "%s (draws: %u, eye: [%.2f, %.2f, %.2f]m, px: [%.0f, %.0f, %.0f, %.0f], gaze: %s)",
+                     stats.inFrustum ? "visible" : (stats.renderDraws > 0 ? "frustum-culled" : "active"),
+                     stats.renderDraws,
+                     stats.eyeLocalX, stats.eyeLocalY, stats.eyeLocalZ,
+                     stats.screenX, stats.screenY, stats.screenW, stats.screenH,
+                     focused ? "FOCUSED" : "idle");
             statusLine(c, "Cockpit MFD", buf);
         }
     }

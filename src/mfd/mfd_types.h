@@ -157,8 +157,8 @@ namespace palette {
     constexpr MfdColor kCyanAccent(0, 168, 255, 255);     // Target / informational blue
     constexpr MfdColor kAlertRed(255, 48, 48, 255);       // Danger / warning red
     constexpr MfdColor kSuccessGreen(64, 255, 64, 255);   // Confirmed / active green
-    constexpr MfdColor kBackground(12, 10, 8, 230);       // Translucent cockpit display glass
-    constexpr MfdColor kFrameBorder(180, 80, 0, 180);     // Bezel border
+    constexpr MfdColor kBackground(14, 12, 10, 255);       // Solid opaque cockpit display backing
+    constexpr MfdColor kFrameBorder(255, 120, 0, 255);     // Solid bright orange bezel border
 }
 
 } // namespace edvr::mfd

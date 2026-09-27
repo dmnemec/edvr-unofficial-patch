@@ -35,6 +35,7 @@
 #include "native_render_labels.h"
 #include "../common/native_render_settings.h"
 #include "../common/config.h"
+#include "../mfd/mfd_manager.h"
 
 namespace edvr {
 
@@ -1354,6 +1355,16 @@ void perfMonitorOverlayLine(char* buf, size_t bufLen) {
         snprintf(buf, bufLen, "%.0f fps   gpu %s ms   %s %s ms",
             perfFpsOf(ps.avgMs), gpuValue, nativeCpuPreSubmit(s.nativeHistory) ? "cpu (pre-submit)" : "cpu",
             cpuValue);
+        if (Config::get().getBool("fix.mfd_hud_debug", false)) {
+            auto& mfd = edvr::mfd::MfdManager::instance();
+            const auto& stats = mfd.debugStats();
+            char mfdBuf[128];
+            snprintf(mfdBuf, sizeof(mfdBuf), "   MFD: %s draws %u eye(%.2f,%.2f,%.2f)",
+                     stats.inFrustum ? "vis" : "culled", stats.renderDraws,
+                     stats.eyeLocalX, stats.eyeLocalY, stats.eyeLocalZ);
+            size_t cur = strlen(buf);
+            if (cur + strlen(mfdBuf) < bufLen) strcat(buf, mfdBuf);
+        }
         return;
     }
     char times[120] = "";
@@ -1368,6 +1379,16 @@ void perfMonitorOverlayLine(char* buf, size_t bufLen) {
             snprintf(times, sizeof(times), "   %.1f ms   thread %.1f", ps.avgMs, recent.threadMs());
     }
     snprintf(buf, bufLen, "%.0f fps%s", perfFpsOf(ps.avgMs), times);
+    if (Config::get().getBool("fix.mfd_hud_debug", false)) {
+        auto& mfd = edvr::mfd::MfdManager::instance();
+        const auto& stats = mfd.debugStats();
+        char mfdBuf[128];
+        snprintf(mfdBuf, sizeof(mfdBuf), "   MFD: %s draws %u eye(%.2f,%.2f,%.2f)",
+                 stats.inFrustum ? "vis" : "culled", stats.renderDraws,
+                 stats.eyeLocalX, stats.eyeLocalY, stats.eyeLocalZ);
+        size_t cur = strlen(buf);
+        if (cur + strlen(mfdBuf) < bufLen) strcat(buf, mfdBuf);
+    }
     buf[bufLen - 1] = 0;
 }
 
