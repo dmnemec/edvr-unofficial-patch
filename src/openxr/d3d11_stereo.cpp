@@ -1,4 +1,5 @@
 #include "d3d11_stereo.h"
+#include "../mfd/mfd_manager.h"
 #include "projection_math.h"
 #include <d3dcompiler.h>
 #include <chrono>
@@ -309,6 +310,7 @@ XrResult D3D11Stereo::initialize(const StereoDispatch& d,XrSession session,ID3D1
   D3D11_RASTERIZER_DESC raster{};raster.FillMode=D3D11_FILL_SOLID;raster.CullMode=D3D11_CULL_NONE;raster.DepthClipEnable=TRUE;
   D3D11_DEPTH_STENCIL_DESC depth{};depth.DepthEnable=FALSE;
   if(FAILED(device->CreateRasterizerState(&raster,&rasterizer_))||FAILED(device->CreateDepthStencilState(&depth,&depth_)))return failed(XR_ERROR_RUNTIME_FAILURE);
+  edvr::mfd::MfdManager::instance().initialize();
   ready_=true;return XR_SUCCESS;
 }
 XrResult D3D11Stereo::render(const XrView (&views)[2],XrSpace space,XrCompositionLayerProjection& layer) {
@@ -497,6 +499,44 @@ XrResult D3D11Stereo::renderCaptured(const XrView (&views)[2],XrSpace space,cons
     drawContext->RSSetViewports(1,&viewports[i]);
     drawContext->PSSetShaderResources(0,1,srvs[i].GetAddressOf());
     drawContext->UpdateSubresource(blitConstants_.Get(),0,nullptr,&constants[i],0,0);drawContext->Draw(3,0);
+
+    // Cockpit MFD Overlay pass
+    if (edvr::mfd::MfdManager::instance().isEnabled()) {
+      if (i == 0) {
+        const auto& hPose = views[0].pose;
+        edvr::mfd::Vec3 headPos(hPose.position.x, hPose.position.y, hPose.position.z);
+        edvr::mfd::Quat headRot(hPose.orientation.x, hPose.orientation.y, hPose.orientation.z, hPose.orientation.w);
+        edvr::mfd::Vec3 headFwd = headRot.rotate(edvr::mfd::Vec3(0, 0, -1.0f));
+
+        edvr::mfd::MfdManager::instance().update(headPos, headFwd, 0.016f);
+
+        auto* focused = edvr::mfd::MfdManager::instance().focusedSlot();
+        if (focused && focused->provider) {
+          edvr::mfd::MfdManager::instance().inputRouter().processInput(
+            true, focused->provider.get(),
+            (GetAsyncKeyState(VK_UP) & 0x8000) != 0,
+            (GetAsyncKeyState(VK_DOWN) & 0x8000) != 0,
+            (GetAsyncKeyState(VK_LEFT) & 0x8000) != 0,
+            (GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0,
+            (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0,
+            (GetAsyncKeyState(VK_BACK) & 0x8000) != 0,
+            (GetAsyncKeyState(VK_PRIOR) & 0x8000) != 0,
+            (GetAsyncKeyState(VK_NEXT) & 0x8000) != 0
+          );
+        }
+
+        edvr::mfd::MfdManager::instance().render();
+      }
+
+      edvr::mfd::MfdManager::instance().renderToEyeRtv(
+        device_.Get(), drawContext, rtv,
+        views[i].pose, views[i].fov,
+        eyes_[i].width, eyes_[i].height,
+        blitVertexShader_.Get(), blitPixelShader_.Get(), blitSampler_.Get(),
+        blitConstants_.Get()
+      );
+    }
+
     ID3D11ShaderResourceView* nullSrv=nullptr;drawContext->PSSetShaderResources(0,1,&nullSrv);
     drawContext->OMSetRenderTargets(0,nullptr,nullptr);
     if(ownedImmediateScene_) {

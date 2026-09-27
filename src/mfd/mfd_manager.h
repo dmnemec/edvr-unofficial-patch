@@ -6,9 +6,15 @@
 #include "mfd_gaze_tracker.h"
 #include "mfd_input_router.h"
 #include "mfd_compositor.h"
+
+#include <d3d11.h>
 #include <memory>
 #include <string>
 #include <vector>
+
+struct XrPosef;
+struct XrFovf;
+struct XrCompositionLayerBaseHeader;
 
 namespace edvr::mfd {
 
@@ -52,6 +58,17 @@ public:
     // Render all visible MFD slots
     void render();
 
+    // Render projected MFD onto eye swapchain RTV in 3D cockpit space
+    void renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* context,
+                        ID3D11RenderTargetView* rtv,
+                        const XrPosef& eyePose, const XrFovf& eyeFov,
+                        uint32_t viewportWidth, uint32_t viewportHeight,
+                        ID3D11VertexShader* vs, ID3D11PixelShader* ps,
+                        ID3D11SamplerState* sampler, ID3D11Buffer* constantsBuffer);
+
+    // Layer header accessor for OpenXR frame boundary
+    const XrCompositionLayerBaseHeader* getOpenXrLayerHeader();
+
     // Input routing
     MfdInputRouter& inputRouter() { return m_inputRouter; }
 
@@ -62,13 +79,15 @@ public:
     }
 
 private:
-    bool m_enabled = true;
+    bool m_enabled = false;
     int m_renderWidth = 512;
     int m_renderHeight = 384;
 
     std::vector<MfdSlot> m_slots;
     MfdInputRouter m_inputRouter;
     std::unique_ptr<IMfdCompositor> m_compositor;
+
+    void ensureDefaultSlots();
 };
 
 } // namespace edvr::mfd

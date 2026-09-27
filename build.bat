@@ -559,7 +559,9 @@ cl.exe %CFLAGS% %NGXFLAGS% %FSRFLAGS% /Fo"%OBJ%\d3d11"\ ^
     "src\d3d11\loader_panel.cpp" ^
     "src\d3d11\splash_dim.cpp" ^
     "src\d3d11\billboard_fix.cpp" ^
-    "src\d3d11\particle_fix.cpp" "src\d3d11\shader_swap.cpp" "src\d3d11\sunglare_fix.cpp"
+    "src\d3d11\particle_fix.cpp" "src\d3d11\shader_swap.cpp" "src\d3d11\sunglare_fix.cpp" ^
+    "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
+    "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp"
 if errorlevel 1 ( echo [edvr] ERROR: compile failed & exit /b 1 )
 
 REM gdi32.lib: the settings menu's panel is rasterised with GDI (the game
@@ -616,7 +618,9 @@ cl.exe /nologo /W4 /O2 /EHsc /std:c++17 /MT /LD /D_CRT_SECURE_NO_WARNINGS %EDVR_
     "src\openxr\shared_texture_transfer.cpp" "src\openxr\producer_gpu_timing.cpp" ^
     "src\openxr\device_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\openxr\openvr_compositor.cpp" "src\openxr\openvr_auxiliary.cpp" ^
-    "src\common\frame_flag.cpp" ^
+    "src\common\frame_flag.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
+    "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
+    "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp" ^
     /link /INCREMENTAL:NO %EDVR_CPU_LINK% /PDB:"%BUILD%\edvr_openxr_runtime.pdb" /DEF:"src\openxr\native_module.def" "%OBJ%\openxr_module\version.res" d3d11.lib dxgi.lib d3dcompiler.lib user32.lib
 if errorlevel 1 ( echo [edvr] ERROR: native runtime module build failed & exit /b 1 )
 
@@ -1558,7 +1562,9 @@ for %%T in (native stereo) do (
         "src\openxr\device_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
         "src\openxr\openvr_compositor.cpp" "tools\openxr_native_test\compositor_caller.cpp" ^
         "src\openxr\openvr_auxiliary.cpp" "src\openxr\runtime_exports.cpp" ^
-        "src\common\frame_flag.cpp" ^
+        "src\common\frame_flag.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
+        "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
+        "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp" ^
         /link /INCREMENTAL:NO dxgi.lib d3dcompiler.lib user32.lib
     if errorlevel 1 ( echo [edvr] ERROR: OpenXR %%T test build failed & exit /b 1 )
 )
@@ -1659,7 +1665,10 @@ cl.exe /nologo /W4 /O2 /EHsc /std:c++17 /MT /I"third_party\openxr\include" ^
     "tools\openxr_proxy_state_test\openxr_proxy_state_test.cpp" ^
     "src\openxr\d3d11_stereo.cpp" "src\openxr\eye_capture.cpp" "src\openxr\skybox_capture.cpp" ^
     "src\openxr\shared_texture_transfer.cpp" "src\openxr\producer_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
-    /link /INCREMENTAL:NO d3d11.lib dxgi.lib d3dcompiler.lib
+    "src\common\config.cpp" "src\common\log.cpp" ^
+    "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
+    "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp" ^
+    /link /INCREMENTAL:NO d3d11.lib dxgi.lib d3dcompiler.lib user32.lib
 if errorlevel 1 ( echo [edvr] ERROR: OpenXR proxy state test build failed & exit /b 1 )
 "%BUILD%\openxr_proxy_state_test.exe" --dry-run || exit /b 1
 "%BUILD%\openxr_proxy_state_test.exe" --self-test || exit /b 1
@@ -2397,7 +2406,7 @@ exit /b 0
 echo [edvr] === mfd_test.exe ===
 if not exist "%OBJ%\mfdtest" mkdir "%OBJ%\mfdtest"
 cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /WX ^
-    /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
+    /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS /I"third_party\openxr\include" ^
     /Fo"%OBJ%\mfdtest\\" /Fe"%BUILD%\mfd_test.exe" ^
     "tools\mfd_test\mfd_test.cpp" ^
     "src\mfd\mfd_provider.cpp" ^
@@ -2406,6 +2415,7 @@ cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /WX ^
     "src\mfd\mfd_gaze_tracker.cpp" ^
     "src\mfd\mfd_input_router.cpp" ^
     "src\mfd\mfd_manager.cpp" ^
+    "src\common\config.cpp" "src\common\log.cpp" ^
     /link /INCREMENTAL:NO
 if errorlevel 1 ( echo [edvr] ERROR: mfd test build failed & exit /b 1 )
 "%BUILD%\mfd_test.exe" || exit /b 1

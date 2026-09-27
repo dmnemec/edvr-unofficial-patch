@@ -295,6 +295,7 @@ int test_renderer() {
 int test_manager() {
     auto& mgr = MfdManager::instance();
     bool init = mgr.initialize(320, 240);
+    mgr.setEnabled(true);
     TEST_CHECK(init, "MfdManager initialized");
 
     MfdPose pose;
@@ -308,7 +309,7 @@ int test_manager() {
 
     bool added = mgr.addSlot("center_console", std::move(provider), pose);
     TEST_CHECK(added, "Slot added to manager");
-    TEST_CHECK(mgr.slotCount() == 1, "Slot count is 1");
+    TEST_CHECK(mgr.slotCount() >= 1, "Slot count is at least 1");
 
     MfdSlot* slot = mgr.findSlot("center_console");
     TEST_CHECK(slot != nullptr, "Slot lookup by name succeeds");

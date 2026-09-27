@@ -40,6 +40,7 @@
 #include "sharpen_pass.h"
 #include "temporal_pass.h"
 #include "vscreen_res.h"
+#include "../mfd/mfd_manager.h"
 // fsr3_engine.h is deliberately NOT included: the Temporal AA status line
 // reaches AMD's price and its name through temporal_pass.h's
 // temporalPassTrainedTotals, which answers for the engine in force (F6).
@@ -1615,6 +1616,24 @@ void buildStatus(MenuContent& c) {
             snprintf(buf, sizeof(buf), "%s", mode.c_str());
         }
         statusLine(c, "Temporal AA", buf);
+    }
+    {
+        const bool mfdEnabled = Config::get().getBool("fix.cockpit_mfd", false);
+        if (!mfdEnabled) {
+            statusLine(c, "Cockpit MFD", "off (fix.cockpit_mfd = 0)");
+        } else {
+            auto& mfd = edvr::mfd::MfdManager::instance();
+            auto* focused = mfd.focusedSlot();
+            if (focused) {
+                snprintf(buf, sizeof(buf), "active (%zu slot%s, focused: %s, gaze: ON)",
+                         mfd.slotCount(), mfd.slotCount() == 1 ? "" : "s",
+                         focused->name.c_str());
+            } else {
+                snprintf(buf, sizeof(buf), "active (%zu slot%s, gaze: idle)",
+                         mfd.slotCount(), mfd.slotCount() == 1 ? "" : "s");
+            }
+            statusLine(c, "Cockpit MFD", buf);
+        }
     }
     {
         // Stage 0 price report (docs/foveated-dlss-design-2026-09-14.md):

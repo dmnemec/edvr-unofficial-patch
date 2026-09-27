@@ -4,8 +4,12 @@
 #include "mfd_view_model.h"
 #include <vector>
 #include <cstdint>
+#include <d3d11.h>
+#include <wrl/client.h>
 
 namespace edvr::mfd {
+
+using Microsoft::WRL::ComPtr;
 
 // Rasterizes MfdViewModel into an RGBA8 bitmap buffer matching
 // Elite Dangerous's native cockpit HUD aesthetics.
@@ -23,6 +27,9 @@ public:
     // Render the complete view model onto the internal pixel buffer.
     void render(const MfdViewModel& model);
 
+    // D3D11 Shader Resource View helper for rendering onto eye swapchains:
+    void createOrUpdateD3D11Srv(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11ShaderResourceView** outSrv);
+
     // Drawing primitives:
     void clear(MfdColor color);
     void drawPixel(int x, int y, MfdColor color);
@@ -38,6 +45,11 @@ private:
     int m_width;
     int m_height;
     std::vector<uint32_t> m_pixels; // RGBA8 packed
+
+    ComPtr<ID3D11Texture2D> m_d3dTexture;
+    ComPtr<ID3D11ShaderResourceView> m_d3dSrv;
+    int m_texWidth = 0;
+    int m_texHeight = 0;
 
     void renderHeader(const MfdViewModel& model, MfdColor mainColor, MfdColor dimColor);
     void renderTabs(const MfdViewModel& model, MfdColor mainColor, MfdColor dimColor);

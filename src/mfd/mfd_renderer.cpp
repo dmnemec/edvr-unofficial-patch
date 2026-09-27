@@ -3,6 +3,13 @@
 #include <algorithm>
 #include <cmath>
 
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
 namespace edvr::mfd {
 
 MfdRenderer::MfdRenderer(int width, int height)
@@ -13,6 +20,38 @@ void MfdRenderer::resize(int width, int height) {
     m_width = width;
     m_height = height;
     m_pixels.assign(width * height, palette::kBackground.toRgba());
+}
+
+void MfdRenderer::createOrUpdateD3D11Srv(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11ShaderResourceView** outSrv) {
+    if (!device || !context || !outSrv || m_width <= 0 || m_height <= 0 || m_pixels.empty()) return;
+
+    if (!m_d3dTexture || m_texWidth != m_width || m_texHeight != m_height) {
+        m_d3dTexture.Reset();
+        m_d3dSrv.Reset();
+        m_texWidth = m_width;
+        m_texHeight = m_height;
+
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = m_width;
+        desc.Height = m_height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA initData{};
+        initData.pSysMem = m_pixels.data();
+        initData.SysMemPitch = m_width * sizeof(uint32_t);
+
+        if (FAILED(device->CreateTexture2D(&desc, &initData, &m_d3dTexture))) return;
+        if (FAILED(device->CreateShaderResourceView(m_d3dTexture.Get(), nullptr, &m_d3dSrv))) return;
+    } else {
+        context->UpdateSubresource(m_d3dTexture.Get(), 0, nullptr, m_pixels.data(), m_width * sizeof(uint32_t), 0);
+    }
+
+    *outSrv = m_d3dSrv.Get();
 }
 
 void MfdRenderer::clear(MfdColor color) {
@@ -226,7 +265,8 @@ void MfdRenderer::renderListTab(const MfdTab& tab, bool focused, MfdColor mainCo
     if (maxRows <= 0) maxRows = 1;
 
     int totalItems = static_cast<int>(tab.items.size());
-    int scroll = std::clamp(tab.scrollOffset, 0, std::max(0, totalItems - maxRows));
+    int maxScroll = (std::max)(0, totalItems - maxRows);
+    int scroll = (std::clamp)(tab.scrollOffset, 0, maxScroll);
 
     for (int i = 0; i < maxRows && (scroll + i) < totalItems; ++i) {
         int itemIdx = scroll + i;
@@ -300,7 +340,8 @@ void MfdRenderer::renderTextTab(const MfdTab& tab, MfdColor mainColor, MfdColor 
     int maxLines = (m_height - startY - 34) / lineH;
 
     int totalLines = static_cast<int>(tab.lines.size());
-    int scroll = std::clamp(tab.textScrollLine, 0, std::max(0, totalLines - maxLines));
+    int maxScroll = (std::max)(0, totalLines - maxLines);
+    int scroll = (std::clamp)(tab.textScrollLine, 0, maxScroll);
 
     for (int i = 0; i < maxLines && (scroll + i) < totalLines; ++i) {
         int y = startY + i * lineH;
