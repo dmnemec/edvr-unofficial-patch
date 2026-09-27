@@ -2418,7 +2418,7 @@ cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /WX ^
     "src\mfd\mfd_input_router.cpp" ^
     "src\mfd\mfd_manager.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
-    /link /INCREMENTAL:NO
+    /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib dxgi.lib
 if errorlevel 1 ( echo [edvr] ERROR: mfd test build failed & exit /b 1 )
 "%BUILD%\mfd_test.exe" || exit /b 1
 exit /b 0

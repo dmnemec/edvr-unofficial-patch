@@ -1,5 +1,6 @@
 #include "mfd_manager.h"
 #include "../common/config.h"
+#include "../common/log.h"
 #include <algorithm>
 
 #if __has_include(<openxr/openxr.h>)
@@ -159,6 +160,8 @@ bool MfdManager::initialize(int renderWidth, int renderHeight) {
     edvr::Config::get().init(edvr::executableDirectory());
     ensureDefaultSlots();
     m_enabled = edvr::Config::get().getBool("fix.cockpit_mfd", false);
+    Log::get().note("mfd: initialized renderSize=(%dx%d), enabled=%d, default_slots=%zu\n",
+                    m_renderWidth, m_renderHeight, isEnabled() ? 1 : 0, m_slots.size());
 
     if (m_compositor) {
         if (auto* quad = dynamic_cast<OpenXrQuadCompositor*>(m_compositor.get())) {
@@ -294,9 +297,14 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
         m_debugStats.eyeLocalY = eyeLocal.y;
         m_debugStats.eyeLocalZ = eyeLocal.z;
 
+        static uint32_t s_cullLog = 0;
         // Must be in front of the eye (-Z in OpenXR eye space)
         if (eyeLocal.z >= -0.05f) {
             m_debugStats.inFrustum = false;
+            if (s_cullLog < 10) {
+                s_cullLog++;
+                Log::get().note("mfd_cull: behind eye (z=%.2f >= -0.05)\n", eyeLocal.z);
+            }
             continue;
         }
 
@@ -313,6 +321,10 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
         float tanH = tanUp - tanDown;
         if (tanW <= 1e-4f || tanH <= 1e-4f) {
             m_debugStats.inFrustum = false;
+            if (s_cullLog < 10) {
+                s_cullLog++;
+                Log::get().note("mfd_cull: invalid FOV tangents (tanW=%.4f tanH=%.4f)\n", tanW, tanH);
+            }
             continue;
         }
 
@@ -332,6 +344,10 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
 
         if (pixW < 10.0f || pixH < 10.0f) {
             m_debugStats.inFrustum = false;
+            if (s_cullLog < 10) {
+                s_cullLog++;
+                Log::get().note("mfd_cull: projected size too small (pixW=%.1f pixH=%.1f)\n", pixW, pixH);
+            }
             continue;
         }
 
@@ -342,6 +358,11 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
         if (vx + pixW < 0 || vx >= static_cast<float>(viewportWidth) ||
             vy + pixH < 0 || vy >= static_cast<float>(viewportHeight)) {
             m_debugStats.inFrustum = false;
+            if (s_cullLog < 10) {
+                s_cullLog++;
+                Log::get().note("mfd_cull: off-screen bounds (vx=%.1f vy=%.1f pixW=%.1f pixH=%.1f vp=(%ux%u))\n",
+                                vx, vy, pixW, pixH, viewportWidth, viewportHeight);
+            }
             continue;
         }
 
@@ -359,7 +380,13 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
 
         ID3D11ShaderResourceView* mfdSrv = nullptr;
         slot.renderer->createOrUpdateD3D11Srv(device, context, &mfdSrv);
-        if (!mfdSrv) continue;
+        if (!mfdSrv) {
+            if (s_cullLog < 10) {
+                s_cullLog++;
+                Log::get().note("mfd_cull: failed to create D3D11 SRV\n");
+            }
+            continue;
+        }
 
         // Bind viewport for MFD overlay
         D3D11_VIEWPORT vp{};
@@ -370,6 +397,14 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
         vp.MinDepth = 0.0f;
         vp.MaxDepth = 1.0f;
 
+        if (m_debugStats.renderDraws <= 10 || (m_debugStats.renderDraws % 300) == 0) {
+            Log::get().note("mfd_draw: #%u eyeLocal=(%.2f,%.2f,%.2f) vp=(%.0f,%.0f,%.0fx%.0f) headLocked=%d\n",
+                            m_debugStats.renderDraws, eyeLocal.x, eyeLocal.y, eyeLocal.z,
+                            vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height, headLocked ? 1 : 0);
+        }
+
+        context->IASetInputLayout(nullptr);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context->RSSetViewports(1, &vp);
         context->OMSetRenderTargets(1, &rtv, nullptr);
         context->VSSetShader(vs, nullptr, 0);

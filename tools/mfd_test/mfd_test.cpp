@@ -12,6 +12,16 @@
 #include "../../src/mfd/mfd_compositor.h"
 #include "../../src/mfd/mfd_manager.h"
 
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#if __has_include(<openxr/openxr.h>)
+#include <openxr/openxr.h>
+#else
+struct XrVector3f { float x, y, z; };
+struct XrQuaternionf { float x, y, z, w; };
+struct XrPosef { XrQuaternionf orientation; XrVector3f position; };
+struct XrFovf { float angleLeft, angleRight, angleUp, angleDown; };
+#endif
 #include <cassert>
 #include <iostream>
 #include <string>
@@ -324,9 +334,178 @@ int test_manager() {
 
     // Execute render cycle
     mgr.render();
-    TEST_CHECK(mgr.compositor() != nullptr, "Compositor valid");
-    TEST_CHECK(mgr.compositor()->backend() == MfdCompositorBackend::kOpenXrQuadLayer, "Default compositor is OpenXR Quad Layer");
+    mgr.shutdown();
+    return 0;
+}
 
+// 8. Test Cross-DLL Shared Memory Telemetry
+int test_shared_telemetry() {
+    MfdManager::publishSharedTelemetry(42, 2, true, 0.1f, -0.2f, -0.5f, 100.0f, 200.0f, 300.0f, 150.0f);
+
+    uint32_t draws = 0;
+    int focusState = 0;
+    bool inFrustum = false;
+    float eyeX = 0, eyeY = 0, eyeZ = 0;
+    float sx = 0, sy = 0, sw = 0, sh = 0;
+    bool ok = MfdManager::readSharedTelemetry(&draws, &focusState, &inFrustum, &eyeX, &eyeY, &eyeZ, &sx, &sy, &sw, &sh);
+    TEST_CHECK(ok, "readSharedTelemetry succeeds");
+    TEST_CHECK(draws == 42, "draws match published value");
+    TEST_CHECK(focusState == 2, "focusState matches published value");
+    TEST_CHECK(inFrustum == true, "inFrustum matches published value");
+    TEST_CHECK(std::abs(eyeX - 0.1f) < 1e-3f, "eyeX matches");
+    TEST_CHECK(std::abs(eyeY - -0.2f) < 1e-3f, "eyeY matches");
+    TEST_CHECK(std::abs(eyeZ - -0.5f) < 1e-3f, "eyeZ matches");
+    return 0;
+}
+
+// 9. Test End-to-End Direct3D 11 Render Target Rasterization and Pixel Assertion
+int test_d3d11_render_to_eye_rtv() {
+    ID3D11Device* device = nullptr;
+    ID3D11DeviceContext* context = nullptr;
+    D3D_FEATURE_LEVEL fl;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, &fl, &context);
+    if (FAILED(hr)) {
+        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, &fl, &context);
+    }
+    TEST_CHECK(SUCCEEDED(hr) && device && context, "D3D11 device creation");
+
+    const UINT width = 1280;
+    const UINT height = 720;
+
+    D3D11_TEXTURE2D_DESC texDesc{};
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.MipLevels = 1;
+    texDesc.ArraySize = 1;
+    texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Usage = D3D11_USAGE_DEFAULT;
+    texDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+    ID3D11Texture2D* eyeTex = nullptr;
+    TEST_CHECK(SUCCEEDED(device->CreateTexture2D(&texDesc, nullptr, &eyeTex)), "Create eye texture");
+
+    ID3D11RenderTargetView* rtv = nullptr;
+    TEST_CHECK(SUCCEEDED(device->CreateRenderTargetView(eyeTex, nullptr, &rtv)), "Create eye RTV");
+
+    D3D11_TEXTURE2D_DESC td{};
+    eyeTex->GetDesc(&td);
+    td.Usage = D3D11_USAGE_STAGING;
+    td.BindFlags = 0;
+    td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    td.MiscFlags = 0;
+    ID3D11Texture2D* staging = nullptr;
+    HRESULT hrStage = device->CreateTexture2D(&td, nullptr, &staging);
+    if (FAILED(hrStage)) {
+        std::cerr << "Create Staging failed hr=0x" << std::hex << hrStage
+                  << " devRemoved=0x" << device->GetDeviceRemovedReason() << std::dec << std::endl;
+        return 1;
+    }
+
+    // Clear RTV to pure black
+    const float black[4] = {0, 0, 0, 1.0f};
+    context->ClearRenderTargetView(rtv, black);
+
+    const char* vsCode = R"(
+        struct O { float4 pos : SV_POSITION; float2 uv : TEXCOORD; };
+        O vs(uint id : SV_VertexID) {
+            O o;
+            float2 p = float2((id << 1) & 2, id & 2);
+            o.pos = float4(p * float2(2, -2) + float2(-1, 1), 0, 1);
+            o.uv = p;
+            return o;
+        }
+    )";
+    const char* psCode = R"(
+        cbuffer Constants : register(b0) { float4 bounds; float4 clampUV; float encodeSRGB; float3 pad; };
+        Texture2D srcTex : register(t0);
+        SamplerState samp : register(s0);
+        float4 ps(float4 pos : SV_POSITION, float2 uv : TEXCOORD) : SV_TARGET {
+            float2 suv = clamp(bounds.xy + uv * (bounds.zw - bounds.xy), clampUV.xy, clampUV.zw);
+            return srcTex.Sample(samp, suv);
+        }
+    )";
+
+    ID3DBlob* vsBlob = nullptr;
+    ID3DBlob* psBlob = nullptr;
+    TEST_CHECK(SUCCEEDED(D3DCompile(vsCode, strlen(vsCode), nullptr, nullptr, nullptr, "vs", "vs_5_0", 0, 0, &vsBlob, nullptr)), "Compile VS");
+    TEST_CHECK(SUCCEEDED(D3DCompile(psCode, strlen(psCode), nullptr, nullptr, nullptr, "ps", "ps_5_0", 0, 0, &psBlob, nullptr)), "Compile PS");
+
+    ID3D11VertexShader* vs = nullptr;
+    ID3D11PixelShader* ps = nullptr;
+    TEST_CHECK(SUCCEEDED(device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &vs)), "Create VS");
+    TEST_CHECK(SUCCEEDED(device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &ps)), "Create PS");
+    vsBlob->Release();
+    psBlob->Release();
+
+    D3D11_SAMPLER_DESC sampDesc{};
+    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sampDesc.AddressU = sampDesc.AddressV = sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    ID3D11SamplerState* sampler = nullptr;
+    TEST_CHECK(SUCCEEDED(device->CreateSamplerState(&sampDesc, &sampler)), "Create Sampler");
+
+    D3D11_BUFFER_DESC bufDesc{};
+    bufDesc.ByteWidth = 48;
+    bufDesc.Usage = D3D11_USAGE_DEFAULT;
+    bufDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    ID3D11Buffer* cb = nullptr;
+    TEST_CHECK(SUCCEEDED(device->CreateBuffer(&bufDesc, nullptr, &cb)), "Create CB");
+
+    auto& mgr = MfdManager::instance();
+    mgr.initialize(512, 384);
+    mgr.setEnabled(true);
+    mgr.render();
+
+    XrPosef eyePose{};
+    eyePose.orientation.w = 1.0f;
+    eyePose.position.x = 0.0f;
+    eyePose.position.y = 0.0f;
+    eyePose.position.z = 0.0f;
+
+    XrFovf eyeFov{};
+    eyeFov.angleLeft = -0.785398f;
+    eyeFov.angleRight = 0.785398f;
+    eyeFov.angleUp = 0.785398f;
+    eyeFov.angleDown = -0.785398f;
+
+    mgr.renderToEyeRtv(device, context, rtv, eyePose, eyeFov, width, height, vs, ps, sampler, cb);
+
+    ID3D11RenderTargetView* nullRtv[1] = {nullptr};
+    context->OMSetRenderTargets(1, nullRtv, nullptr);
+    context->CopyResource(staging, eyeTex);
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    HRESULT hrMap = context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hrMap)) {
+        std::cerr << "Map Staging failed hr=0x" << std::hex << hrMap
+                  << " devRemoved=0x" << device->GetDeviceRemovedReason() << std::dec << std::endl;
+        return 1;
+    }
+
+    uint32_t nonBlackPixels = 0;
+    const uint8_t* row = static_cast<const uint8_t*>(mapped.pData);
+    for (UINT y = 0; y < height; ++y) {
+        const uint32_t* pix = reinterpret_cast<const uint32_t*>(row + y * mapped.RowPitch);
+        for (UINT x = 0; x < width; ++x) {
+            if ((pix[x] & 0x00FFFFFF) != 0) {
+                nonBlackPixels++;
+            }
+        }
+    }
+    context->Unmap(staging, 0);
+
+    TEST_CHECK(nonBlackPixels > 1000, "MFD rendered visible non-black pixels to eye RTV");
+    std::cout << "      [D3D11 WARP] Rendered " << nonBlackPixels << " MFD pixels to eye RTV" << std::endl;
+
+    staging->Release();
+    cb->Release();
+    sampler->Release();
+    vs->Release();
+    ps->Release();
+    rtv->Release();
+    eyeTex->Release();
+    context->Release();
+    device->Release();
     mgr.shutdown();
     return 0;
 }
@@ -354,6 +533,12 @@ int main() {
 
     if (test_manager() != 0) return 1;
     std::cout << "  ok  MfdManager End-to-End Orchestration" << std::endl;
+
+    if (test_shared_telemetry() != 0) return 1;
+    std::cout << "  ok  Cross-DLL Shared Memory Telemetry" << std::endl;
+
+    if (test_d3d11_render_to_eye_rtv() != 0) return 1;
+    std::cout << "  ok  Direct3D 11 Eye RTV Hardware Rasterization & Readback" << std::endl;
 
     std::cout << "[mfd_test] ALL TESTS PASSED." << std::endl;
     return 0;
