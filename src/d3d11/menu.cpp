@@ -40,7 +40,7 @@
 #include "sharpen_pass.h"
 #include "temporal_pass.h"
 #include "vscreen_res.h"
-#include "../mfd/mfd_manager.h"
+#include "../common/mfd_telemetry.h"
 // fsr3_engine.h is deliberately NOT included: the Temporal AA status line
 // reaches AMD's price and its name through temporal_pass.h's
 // temporalPassTrainedTotals, which answers for the engine in force (F6).
@@ -1625,20 +1625,24 @@ void buildStatus(MenuContent& c) {
         statusLine(c, "Temporal AA", buf);
     }
     {
-        const bool mfdEnabled = Config::get().getBool("fix.cockpit_mfd", false);
-        if (!mfdEnabled) {
-            statusLine(c, "Cockpit MFD", "off (fix.cockpit_mfd = 0)");
-        } else {
-            auto& mfd = edvr::mfd::MfdManager::instance();
-            const auto& stats = mfd.debugStats();
-            auto* focused = mfd.focusedSlot();
+        uint32_t draws = 0;
+        int focusState = 0;
+        bool inFrustum = false;
+        float eyeX = 0, eyeY = 0, eyeZ = 0;
+        float screenX = 0, screenY = 0, screenW = 0, screenH = 0;
+        bool haveShared = edvr::mfd::readSharedTelemetry(&draws, &focusState, &inFrustum,
+                                                         &eyeX, &eyeY, &eyeZ,
+                                                         &screenX, &screenY, &screenW, &screenH);
+        if (haveShared) {
             snprintf(buf, sizeof(buf), "%s (draws: %u, eye: [%.2f, %.2f, %.2f]m, px: [%.0f, %.0f, %.0f, %.0f], gaze: %s)",
-                     stats.inFrustum ? "visible" : (stats.renderDraws > 0 ? "frustum-culled" : "active"),
-                     stats.renderDraws,
-                     stats.eyeLocalX, stats.eyeLocalY, stats.eyeLocalZ,
-                     stats.screenX, stats.screenY, stats.screenW, stats.screenH,
-                     focused ? "FOCUSED" : "idle");
+                     inFrustum ? "visible" : (draws > 0 ? "frustum-culled" : "active"),
+                     draws,
+                     eyeX, eyeY, eyeZ,
+                     screenX, screenY, screenW, screenH,
+                     (focusState == 2) ? "FOCUSED" : (focusState == 1 ? "HOVER" : "idle"));
             statusLine(c, "Cockpit MFD", buf);
+        } else {
+            statusLine(c, "Cockpit MFD", "idle (plugin active or standalone)");
         }
     }
     {
@@ -3970,7 +3974,7 @@ void menuTick(ID3D11Device* dev) {
         const bool showingMenu = s.alpha > 0.0f && !s.toastUp;
         const bool drawnFresh = now - s.lastDrawnMs <= kDrawnFreshMs;
         int mfdFocus = 0;
-        edvr::mfd::MfdManager::readSharedTelemetry(nullptr, &mfdFocus, nullptr, nullptr, nullptr, nullptr);
+        edvr::mfd::readSharedTelemetry(nullptr, &mfdFocus, nullptr, nullptr, nullptr, nullptr);
         const bool mfdFocused = (mfdFocus == 2);
         inputGateSetPrivate((s.open && showingMenu && drawnFresh && !s.pages[s.page].status) || mfdFocused);
         // The fault line follows the gate the way the legend follows the

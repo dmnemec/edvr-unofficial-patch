@@ -35,7 +35,7 @@
 #include "native_render_labels.h"
 #include "../common/native_render_settings.h"
 #include "../common/config.h"
-#include "../mfd/mfd_manager.h"
+#include "../common/mfd_telemetry.h"
 
 namespace edvr {
 
@@ -1360,7 +1360,7 @@ void perfMonitorOverlayLine(char* buf, size_t bufLen) {
             int focusState = 0;
             bool inFrustum = false;
             float eyeX = 0, eyeY = 0, eyeZ = 0;
-            bool haveShared = edvr::mfd::MfdManager::readSharedTelemetry(&draws, &focusState, &inFrustum, &eyeX, &eyeY, &eyeZ);
+            bool haveShared = edvr::mfd::readSharedTelemetry(&draws, &focusState, &inFrustum, &eyeX, &eyeY, &eyeZ);
             char mfdBuf[128];
             if (haveShared) {
                 const char* gazeStr = (focusState == 2) ? "focused" : (focusState == 1 ? "hover" : "idle");
@@ -1391,7 +1391,7 @@ void perfMonitorOverlayLine(char* buf, size_t bufLen) {
         int focusState = 0;
         bool inFrustum = false;
         float eyeX = 0, eyeY = 0, eyeZ = 0;
-        bool haveShared = edvr::mfd::MfdManager::readSharedTelemetry(&draws, &focusState, &inFrustum, &eyeX, &eyeY, &eyeZ);
+        bool haveShared = edvr::mfd::readSharedTelemetry(&draws, &focusState, &inFrustum, &eyeX, &eyeY, &eyeZ);
         char mfdBuf[128];
         if (haveShared) {
             const char* gazeStr = (focusState == 2) ? "focused" : (focusState == 1 ? "hover" : "idle");

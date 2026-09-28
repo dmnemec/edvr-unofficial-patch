@@ -29,7 +29,6 @@
 #include "shader_swap.h"
 #include "gpu_timing.h"
 #include "gpu_census.h"   // issue #38: the per-feature GPU cost census
-#include "../mfd/mfd_manager.h"
 
 namespace edvr {
 namespace {
@@ -1534,18 +1533,6 @@ void menuPanelSetNativeFrustum(const float tans[4]) { if (tans) { memcpy(g_nativ
 void menuPanelClearNativeFrustum() { g_nativeFrustum=false; }
 void* menuPanelCompositeNative(ID3D11Texture2D* src, int eye, const float* bounds, const float xf[12]) {
     if (graphicsRuntimeDisabled() || !src || !xf || eye < 0 || eye > 1) return nullptr;
-    if (edvr::mfd::MfdManager::instance().isEnabled()) {
-        auto& mfd = edvr::mfd::MfdManager::instance();
-        if (mfd.slots().empty()) {
-            mfd.initialize();
-            mfd.setEnabled(true);
-        }
-        if (eye == 0) {
-            edvr::mfd::Vec3 headPos(xf[9], xf[10], xf[11]);
-            edvr::mfd::Vec3 headFwd(-xf[2], -xf[5], -xf[8]);
-            mfd.update(headPos, headFwd, 0.016f);
-        }
-    }
     void* out = nullptr;
     guardedBudget(g_budget, [&] { out = compositeInner(src, eye, bounds, xf); });
     return out;

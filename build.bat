@@ -560,8 +560,7 @@ cl.exe %CFLAGS% %NGXFLAGS% %FSRFLAGS% /Fo"%OBJ%\d3d11"\ ^
     "src\d3d11\splash_dim.cpp" ^
     "src\d3d11\billboard_fix.cpp" ^
     "src\d3d11\particle_fix.cpp" "src\d3d11\shader_swap.cpp" "src\d3d11\sunglare_fix.cpp" ^
-    "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
-    "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp"
+    "src\plugins\plugin_manager.cpp"
 if errorlevel 1 ( echo [edvr] ERROR: compile failed & exit /b 1 )
 
 REM gdi32.lib: the settings menu's panel is rasterised with GDI (the game
@@ -619,10 +618,24 @@ cl.exe /nologo /W4 /O2 /EHsc /std:c++17 /MT /LD /D_CRT_SECURE_NO_WARNINGS %EDVR_
     "src\openxr\device_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\openxr\openvr_compositor.cpp" "src\openxr\openvr_auxiliary.cpp" ^
     "src\common\frame_flag.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
-    "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
-    "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp" ^
+    "src\plugins\plugin_manager.cpp" ^
     /link /INCREMENTAL:NO %EDVR_CPU_LINK% /PDB:"%BUILD%\edvr_openxr_runtime.pdb" /DEF:"src\openxr\native_module.def" "%OBJ%\openxr_module\version.res" d3d11.lib dxgi.lib d3dcompiler.lib user32.lib
 if errorlevel 1 ( echo [edvr] ERROR: native runtime module build failed & exit /b 1 )
+
+echo.
+echo [edvr] === plugins\edvr_mfd.dll ===
+if not exist "%BUILD%\plugins" mkdir "%BUILD%\plugins"
+if not exist "%OBJ%\mfd_plugin" mkdir "%OBJ%\mfd_plugin"
+cl.exe /nologo /W4 /O2 /EHsc /std:c++17 /MT /LD /D_CRT_SECURE_NO_WARNINGS %EDVR_CPU_COMPILE% ^
+    /I"third_party\openxr\include" /Fo"%OBJ%\mfd_plugin\\" ^
+    /DEDVR_VERSION_STRING=\"%EDVR_VER%\" ^
+    /Fe"%BUILD%\plugins\edvr_mfd.dll" "src\mfd\mfd_plugin.cpp" ^
+    "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
+    "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp" ^
+    "src\common\config.cpp" "src\common\log.cpp" ^
+    /link /INCREMENTAL:NO %EDVR_CPU_LINK% /PDB:"%BUILD%\plugins\edvr_mfd.pdb" d3d11.lib dxgi.lib d3dcompiler.lib user32.lib
+if errorlevel 1 ( echo [edvr] ERROR: edvr_mfd plugin build failed & exit /b 1 )
+echo [edvr] built %BUILD%\plugins\edvr_mfd.dll
 
 REM Shared by the installer and installer_test rigs below.
 set INSTALLER_SRC="src\installer\main.cpp" "src\installer\gui.cpp" ^
@@ -845,8 +858,7 @@ cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     "src\common\vtable_hook.cpp" "src\common\code_hook.cpp" "src\common\hotkey.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
     "src\common\guard.cpp" "src\common\frame_flag.cpp" "src\common\proxy.cpp" ^
-    "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
-    "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp" ^
+    "src\plugins\plugin_manager.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib user32.lib gdi32.lib version.lib dxgi.lib d3dcompiler.lib d3d11.lib
 if errorlevel 1 ( echo [edvr] ERROR: native menu test build failed & exit /b 1 )
 "%BUILD%\native_menu_test.exe" --dry-run || exit /b 1
@@ -1565,8 +1577,7 @@ for %%T in (native stereo) do (
         "src\openxr\openvr_compositor.cpp" "tools\openxr_native_test\compositor_caller.cpp" ^
         "src\openxr\openvr_auxiliary.cpp" "src\openxr\runtime_exports.cpp" ^
         "src\common\frame_flag.cpp" "src\common\config.cpp" "src\common\log.cpp" ^
-        "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
-        "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp" ^
+        "src\plugins\plugin_manager.cpp" ^
         /link /INCREMENTAL:NO dxgi.lib d3dcompiler.lib user32.lib
     if errorlevel 1 ( echo [edvr] ERROR: OpenXR %%T test build failed & exit /b 1 )
 )
@@ -1668,8 +1679,7 @@ cl.exe /nologo /W4 /O2 /EHsc /std:c++17 /MT /I"third_party\openxr\include" ^
     "src\openxr\d3d11_stereo.cpp" "src\openxr\eye_capture.cpp" "src\openxr\skybox_capture.cpp" ^
     "src\openxr\shared_texture_transfer.cpp" "src\openxr\producer_gpu_timing.cpp" "src\d3d11\gpu_span_d3d11.cpp" ^
     "src\common\config.cpp" "src\common\log.cpp" ^
-    "src\mfd\mfd_manager.cpp" "src\mfd\mfd_renderer.cpp" "src\mfd\mfd_gaze_tracker.cpp" ^
-    "src\mfd\mfd_input_router.cpp" "src\mfd\mfd_provider.cpp" "src\mfd\mfd_font.cpp" ^
+    "src\plugins\plugin_manager.cpp" ^
     /link /INCREMENTAL:NO d3d11.lib dxgi.lib d3dcompiler.lib user32.lib
 if errorlevel 1 ( echo [edvr] ERROR: OpenXR proxy state test build failed & exit /b 1 )
 "%BUILD%\openxr_proxy_state_test.exe" --dry-run || exit /b 1

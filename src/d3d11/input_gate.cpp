@@ -335,20 +335,32 @@ HRESULT filterDeviceData(DiDoor& d, void* self, DWORD cbObj, LPDIDEVICEOBJECTDAT
 
         if (kind == DeviceKind::kJoystickLike) {
             if (priv) {
-                // Drop button and POV events so buffered presses don't reach game
+                // Drop button presses (down) and POV directions, but allow release events
+                // (dwData == 0) to pass through to the game so held buttons are never latched.
                 uint32_t out = 0;
                 const uint32_t before = *inOut;
                 for (uint32_t i = 0; i < before; ++i) {
                     const auto& ev = rgdod[i];
-                    bool isButtonOrPov = false;
-                    if (ev.dwOfs >= FIELD_OFFSET(DIJOYSTATE2, rgdwPOV) && ev.dwOfs < FIELD_OFFSET(DIJOYSTATE2, lVX)) {
-                        isButtonOrPov = true;
-                    } else if (ev.dwOfs >= FIELD_OFFSET(DIJOYSTATE, rgdwPOV) && ev.dwOfs < FIELD_OFFSET(DIJOYSTATE, rgdwPOV) + sizeof(DWORD)*4 + 32) {
-                        isButtonOrPov = true;
+                    bool isButton = false;
+                    bool isPov = false;
+                    if (ev.dwOfs >= FIELD_OFFSET(DIJOYSTATE2, rgbButtons) && ev.dwOfs < FIELD_OFFSET(DIJOYSTATE2, rgbButtons) + 128) {
+                        isButton = true;
+                    } else if (ev.dwOfs >= FIELD_OFFSET(DIJOYSTATE, rgbButtons) && ev.dwOfs < FIELD_OFFSET(DIJOYSTATE, rgbButtons) + 32) {
+                        isButton = true;
+                    } else if (ev.dwOfs >= FIELD_OFFSET(DIJOYSTATE2, rgdwPOV) && ev.dwOfs < FIELD_OFFSET(DIJOYSTATE2, rgbButtons)) {
+                        isPov = true;
                     }
-                    if (!isButtonOrPov) {
-                        rgdod[out++] = ev;
+
+                    if (isButton) {
+                        if ((ev.dwData & 0x80) != 0) {
+                            continue; // suppress press (down)
+                        }
+                    } else if (isPov) {
+                        if (ev.dwData != 0xFFFFFFFF && ev.dwData != static_cast<DWORD>(-1)) {
+                            continue; // suppress POV direction (pressed)
+                        }
                     }
+                    rgdod[out++] = ev;
                 }
                 *inOut = out;
                 if (out < before) {

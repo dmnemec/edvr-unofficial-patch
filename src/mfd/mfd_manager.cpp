@@ -1,6 +1,7 @@
 #include "mfd_manager.h"
 #include "../common/config.h"
 #include "../common/log.h"
+#include "../common/mfd_telemetry.h"
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -30,32 +31,6 @@ struct XrFovf { float angleLeft, angleRight, angleUp, angleDown; };
 namespace edvr::mfd {
 
 namespace {
-struct MfdSharedState {
-    volatile LONG initialized;
-    volatile LONG draws;
-    volatile LONG focusState;
-    volatile LONG inFrustum;
-    volatile LONG eyeX_mm;
-    volatile LONG eyeY_mm;
-    volatile LONG eyeZ_mm;
-    volatile LONG screenX;
-    volatile LONG screenY;
-    volatile LONG screenW;
-    volatile LONG screenH;
-};
-
-MfdSharedState* getMfdSharedState() {
-    static MfdSharedState* s_shared = nullptr;
-    if (s_shared) return s_shared;
-
-    wchar_t name[64];
-    swprintf_s(name, L"Local\\edvr_mfd_telemetry_v1_%lu", GetCurrentProcessId());
-    HANDLE hMap = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(MfdSharedState), name);
-    if (!hMap) return nullptr;
-
-    s_shared = static_cast<MfdSharedState*>(MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(MfdSharedState)));
-    return s_shared;
-}
 
 void copyToClipboard(const std::string& text) {
     if (text.empty()) return;
