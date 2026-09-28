@@ -23,15 +23,15 @@ void MfdInputRouter::pollJoystickInputs(bool& up, bool& down, bool& left, bool& 
                 if (ji.dwPOV >= 13500 && ji.dwPOV <= 22500) down = true;
                 if (ji.dwPOV >= 22500 && ji.dwPOV <= 31500) left = true;
             }
-            // Check standard D-pad buttons / Secondary menu buttons:
-            // Button 1 (0x1) = Select/Fire
-            // Button 2 (0x2) = Back/Cancel
-            // Button 3 (0x4) = Prev Tab (Q)
-            // Button 4 (0x8) = Next Tab (E)
-            if (ji.dwButtons & 0x01) sel = true;
-            if (ji.dwButtons & 0x02) back = true;
-            if (ji.dwButtons & 0x04) prev = true;
-            if (ji.dwButtons & 0x08) next = true;
+            // Check standard D-pad buttons / Secondary menu buttons / HOTAS mappings:
+            // Buttons 1 & 3 (0x01 | 0x04) = Select / UI Accept / Primary
+            // Buttons 2 & 4 (0x02 | 0x08) = Back / UI Back / Secondary
+            // Buttons 5 & 7 (0x10 | 0x40) = Prev Tab (LB / Cycle Prev Page)
+            // Buttons 6 & 8 (0x20 | 0x80) = Next Tab (RB / Cycle Next Page)
+            if (ji.dwButtons & (0x01 | 0x04)) sel = true;
+            if (ji.dwButtons & (0x02 | 0x08)) back = true;
+            if (ji.dwButtons & (0x10 | 0x40)) prev = true;
+            if (ji.dwButtons & (0x20 | 0x80)) next = true;
         }
     }
 }

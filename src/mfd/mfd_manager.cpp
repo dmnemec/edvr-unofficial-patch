@@ -192,15 +192,40 @@ bool isActivityActive(uint32_t mask, uint32_t flags) {
     bool isDocked = (flags & 0x3) != 0; // Docked or Landed
     bool inFlight = !isDocked;
     bool hardpoints = (flags & (1 << 6)) != 0;
+    bool inAnalysis = (flags & (1 << 27)) != 0;
+    bool inCombat = !inAnalysis;
 
-    if ((mask & kActivityShip) && inShip) return true;
-    if ((mask & kActivitySrv) && inSrv) return true;
-    if ((mask & kActivityFighter) && inFighter) return true;
-    if ((mask & kActivityInFlight) && inFlight) return true;
-    if ((mask & kActivityDocked) && isDocked) return true;
-    if ((mask & kActivityHardpoints) && hardpoints) return true;
+    // Vehicle Category:
+    uint32_t vehicleMask = mask & (kActivityShip | kActivitySrv | kActivityFighter);
+    if (vehicleMask != 0) {
+        bool matchVehicle = ((mask & kActivityShip) && inShip) ||
+                            ((mask & kActivitySrv) && inSrv) ||
+                            ((mask & kActivityFighter) && inFighter);
+        if (!matchVehicle) return false;
+    }
 
-    return false;
+    // Flight State Category:
+    uint32_t flightStateMask = mask & (kActivityInFlight | kActivityDocked);
+    if (flightStateMask != 0) {
+        bool matchFlightState = ((mask & kActivityInFlight) && inFlight) ||
+                                ((mask & kActivityDocked) && isDocked);
+        if (!matchFlightState) return false;
+    }
+
+    // HUD Mode Category (Combat vs Analysis):
+    uint32_t hudModeMask = mask & (kActivityCombat | kActivityAnalysis);
+    if (hudModeMask != 0) {
+        bool matchHudMode = ((mask & kActivityCombat) && inCombat) ||
+                            ((mask & kActivityAnalysis) && inAnalysis);
+        if (!matchHudMode) return false;
+    }
+
+    // Deployments Category:
+    if (mask & kActivityHardpoints) {
+        if (!hardpoints) return false;
+    }
+
+    return true;
 }
 
 void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) {
@@ -423,8 +448,9 @@ void MfdManager::ensureDefaultSlots() {
             slot0->activityMask = kActivityAlways;
             if (slot0->provider && slot0->provider->type() == MfdProviderType::kDeclarativeJson) {
                 auto* decl = static_cast<DeclarativeMfdProvider*>(slot0->provider.get());
-                decl->setKeyValueActionCallback([slot0](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int adjustDelta) {
-                    handleSettingsAdjustment(*slot0, key, adjustDelta);
+                decl->setKeyValueActionCallback([name = std::string("main_mfd")](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int adjustDelta) {
+                    auto* s = MfdManager::instance().findSlot(name);
+                    if (s) handleSettingsAdjustment(*s, key, adjustDelta);
                 });
             }
         }
@@ -517,8 +543,9 @@ void MfdManager::ensureDefaultSlots() {
             slot1->activityMask = kActivityShip | kActivityFighter;
             if (slot1->provider && slot1->provider->type() == MfdProviderType::kDeclarativeJson) {
                 auto* decl = static_cast<DeclarativeMfdProvider*>(slot1->provider.get());
-                decl->setKeyValueActionCallback([slot1](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int adjustDelta) {
-                    handleSettingsAdjustment(*slot1, key, adjustDelta);
+                decl->setKeyValueActionCallback([name = std::string("left_mfd")](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int adjustDelta) {
+                    auto* s = MfdManager::instance().findSlot(name);
+                    if (s) handleSettingsAdjustment(*s, key, adjustDelta);
                 });
             }
         }
@@ -573,8 +600,9 @@ void MfdManager::ensureDefaultSlots() {
             slot2->activityMask = kActivityAlways;
             if (slot2->provider && slot2->provider->type() == MfdProviderType::kDeclarativeJson) {
                 auto* decl = static_cast<DeclarativeMfdProvider*>(slot2->provider.get());
-                decl->setKeyValueActionCallback([slot2](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int adjustDelta) {
-                    handleSettingsAdjustment(*slot2, key, adjustDelta);
+                decl->setKeyValueActionCallback([name = std::string("right_mfd")](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int adjustDelta) {
+                    auto* s = MfdManager::instance().findSlot(name);
+                    if (s) handleSettingsAdjustment(*s, key, adjustDelta);
                 });
             }
         }

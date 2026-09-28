@@ -140,6 +140,8 @@ enum MfdActivityMask : uint32_t {
     kActivityInFlight     = 1 << 4,  // Active only in Flight (not docked or landed)
     kActivityDocked       = 1 << 5,  // Active when docked (Flags bit 0)
     kActivityHardpoints   = 1 << 6,  // Active when hardpoints deployed (Flags bit 6)
+    kActivityCombat       = 1 << 7,  // Active in Combat Mode (Flags bit 27 == 0)
+    kActivityAnalysis     = 1 << 8,  // Active in Analysis Mode (Flags bit 27 == 1 / 0x08000000)
 };
 
 // Color theme presets

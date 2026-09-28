@@ -103,7 +103,7 @@ DiDoor g_diW;
 // A wrapper can give each device a different table. Capture the returned
 // objects before Elite receives them, and keep one reference per patched
 // table so both the table and our restore target stay alive until shutdown.
-constexpr size_t kGameDeviceDoors = 16;
+constexpr size_t kGameDeviceDoors = 32;
 constexpr size_t kFactoryDoors = 8;
 DiDoor g_gameDi[kGameDeviceDoors];
 struct FactoryDoor {
@@ -228,19 +228,32 @@ uint32_t modsNow() {
 
 bool summonModsHeldNow(uint32_t mods) { return (mods & ~modsNow()) == 0; }
 
-// GetCapabilities has the same layout on A and W. The retained keyboard
-// is known; other devices sharing its table are checked without caching a
-// raw pointer that a released device could reuse for a joystick later.
+enum class DeviceKind {
+    kUnknown,
+    kKeyboard,
+    kJoystickLike,
+    kMouse
+};
+
 template <bool Wide>
-bool isKeyboard(DiDoor& d, void* self) {
-    if (self == d.dummy) return true;
+DeviceKind classifyDevice(DiDoor& d, void* self) {
+    if (self == d.dummy) return DeviceKind::kKeyboard;
     void** vt = *reinterpret_cast<void***>(self);
-    if (!vt || !vt[3]) return false;
+    if (!vt || !vt[3]) return DeviceKind::kUnknown;
     DIDEVCAPS caps{};
     caps.dwSize = sizeof(caps);
     typedef HRESULT(STDMETHODCALLTYPE* GetCaps)(void*, LPDIDEVCAPS);
-    return SUCCEEDED(reinterpret_cast<GetCaps>(vt[3])(self, &caps)) &&
-           GET_DIDEVICE_TYPE(caps.dwDevType) == DI8DEVTYPE_KEYBOARD;
+    if (FAILED(reinterpret_cast<GetCaps>(vt[3])(self, &caps))) return DeviceKind::kUnknown;
+    BYTE devType = GET_DIDEVICE_TYPE(caps.dwDevType);
+    if (devType == DI8DEVTYPE_KEYBOARD) return DeviceKind::kKeyboard;
+    if (devType == DI8DEVTYPE_JOYSTICK || devType == DI8DEVTYPE_GAMEPAD ||
+        devType == DI8DEVTYPE_FLIGHT || devType == DI8DEVTYPE_1STPERSON ||
+        devType == DI8DEVTYPE_DRIVING || devType == DI8DEVTYPE_SUPPLEMENTAL ||
+        devType == DI8DEVTYPE_DEVICECTRL) {
+        return DeviceKind::kJoystickLike;
+    }
+    if (devType == DI8DEVTYPE_MOUSE) return DeviceKind::kMouse;
+    return DeviceKind::kUnknown;
 }
 
 template <bool Wide>
@@ -250,10 +263,30 @@ HRESULT filterDeviceState(DiDoor& d, void* self, DWORD cb, LPVOID data) {
     if (self != d.dummy) d.stateForeign.fetch_add(1, std::memory_order_relaxed);
     if (d.retired || FAILED(hr) || !data) return hr;
     guardedBudget(g_budgetDi, [&] {
-        if (!isKeyboard<Wide>(d, self)) return;
+        const DeviceKind kind = classifyDevice<Wide>(d, self);
+        if (kind == DeviceKind::kUnknown || kind == DeviceKind::kMouse) return;
+        const bool priv = g_private.load(std::memory_order_relaxed) != 0;
+
+        if (kind == DeviceKind::kJoystickLike) {
+            if (priv) {
+                if (cb >= sizeof(DIJOYSTATE)) {
+                    auto* js = static_cast<DIJOYSTATE*>(data);
+                    for (int p = 0; p < 4; ++p) js->rgdwPOV[p] = 0xFFFFFFFF;
+                    if (cb >= sizeof(DIJOYSTATE2)) {
+                        auto* js2 = static_cast<DIJOYSTATE2*>(data);
+                        memset(js2->rgbButtons, 0, sizeof(js2->rgbButtons));
+                    } else {
+                        memset(js->rgbButtons, 0, sizeof(js->rgbButtons));
+                    }
+                    d.zeroed.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            return;
+        }
+
+        // Keyboard device path:
         d.stateKeyboard.fetch_add(1, std::memory_order_relaxed);
         if (d.gameDevice) g_gameKeyboardCalls.fetch_add(1, std::memory_order_relaxed);
-        const bool priv = g_private.load(std::memory_order_relaxed) != 0;
         int vk = 0;
         uint8_t dik = 0;
         uint32_t mods = 0;
@@ -280,8 +313,8 @@ HRESULT filterDeviceState(DiDoor& d, void* self, DWORD cb, LPVOID data) {
     });
     if (!g_budgetDi.shouldRun() && !d.retired) {
         d.retired = true;
-        Log::get().note("keyboard gate: the DirectInput door (%s) faulted repeatedly and "
-                        "is pass-through for the rest of this session; keys are SHARED "
+        Log::get().note("input gate: the DirectInput door (%s) faulted repeatedly and "
+                        "is pass-through for the rest of this session; inputs are SHARED "
                         "with the game while the menu is open.",
                         d.name);
     }
@@ -296,10 +329,38 @@ HRESULT filterDeviceData(DiDoor& d, void* self, DWORD cbObj, LPDIDEVICEOBJECTDAT
     if (d.retired || FAILED(hr) || !rgdod || !inOut || *inOut == 0) return hr;
     if (cbObj != sizeof(DIDEVICEOBJECTDATA)) return hr;   // a layout this was not written for
     guardedBudget(g_budgetDi, [&] {
-        if (!isKeyboard<Wide>(d, self)) return;
+        const DeviceKind kind = classifyDevice<Wide>(d, self);
+        if (kind == DeviceKind::kUnknown || kind == DeviceKind::kMouse) return;
+        const bool priv = g_private.load(std::memory_order_relaxed) != 0;
+
+        if (kind == DeviceKind::kJoystickLike) {
+            if (priv) {
+                // Drop button and POV events so buffered presses don't reach game
+                uint32_t out = 0;
+                const uint32_t before = *inOut;
+                for (uint32_t i = 0; i < before; ++i) {
+                    const auto& ev = rgdod[i];
+                    bool isButtonOrPov = false;
+                    if (ev.dwOfs >= FIELD_OFFSET(DIJOYSTATE2, rgdwPOV) && ev.dwOfs < FIELD_OFFSET(DIJOYSTATE2, lVX)) {
+                        isButtonOrPov = true;
+                    } else if (ev.dwOfs >= FIELD_OFFSET(DIJOYSTATE, rgdwPOV) && ev.dwOfs < FIELD_OFFSET(DIJOYSTATE, rgdwPOV) + sizeof(DWORD)*4 + 32) {
+                        isButtonOrPov = true;
+                    }
+                    if (!isButtonOrPov) {
+                        rgdod[out++] = ev;
+                    }
+                }
+                *inOut = out;
+                if (out < before) {
+                    d.zeroed.fetch_add(before - out, std::memory_order_relaxed);
+                }
+            }
+            return;
+        }
+
+        // Keyboard device path:
         d.dataKeyboard.fetch_add(1, std::memory_order_relaxed);
         if (d.gameDevice) g_gameKeyboardCalls.fetch_add(1, std::memory_order_relaxed);
-        const bool priv = g_private.load(std::memory_order_relaxed) != 0;
         int vk = 0;
         uint8_t dik = 0;
         uint32_t mods = 0;
@@ -498,9 +559,10 @@ struct CaptureLock {
 };
 
 template <size_t... I>
-void captureKeyboard(void* device, std::index_sequence<I...>) {
+void captureDevice(void* device, std::index_sequence<I...>) {
     DiDoor unknown;
-    if (!isKeyboard<false>(unknown, device)) return;
+    const DeviceKind kind = classifyDevice<false>(unknown, device);
+    if (kind != DeviceKind::kKeyboard && kind != DeviceKind::kJoystickLike) return;
     static const PFN_GetDeviceState stateHooks[] = {&gameDeviceState<I>...};
     static const PFN_GetDeviceData dataHooks[] = {&gameDeviceData<I>...};
     CaptureLock lock;
@@ -520,7 +582,7 @@ void captureKeyboard(void* device, std::index_sequence<I...>) {
             d.hook.uninstall();
             return;
         }
-        d.name = "game keyboard";
+        d.name = (kind == DeviceKind::kKeyboard) ? "game keyboard" : "game joystick/vJoy";
         d.gameDevice = true;
         d.dummy = device;
         reinterpret_cast<IUnknown*>(device)->AddRef();
@@ -540,13 +602,12 @@ void captureKeyboard(void* device, std::index_sequence<I...>) {
         iatHookEntryModule(table, d.tableModule, sizeof(d.tableModule));
         iatHookEntryModule(reinterpret_cast<void*>(d.origState), d.entryModule,
                           sizeof(d.entryModule));
-        Log::get().note("keyboard gate: captured the game's keyboard at CreateDevice; "
-                        "table %zu in %s, forwarding through %s. Private overlay tables "
-                        "are covered; the device's identity is unchanged.",
-                        i, d.tableModule, d.entryModule);
+        Log::get().note("input gate: captured %s at CreateDevice; "
+                        "table %zu in %s, forwarding through %s.",
+                        d.name, i, d.tableModule, d.entryModule);
         return;
     }
-    Log::get().note("keyboard gate: all %zu keyboard tables are occupied; a new table "
+    Log::get().note("input gate: all %zu device tables are occupied; a new table "
                     "is left untouched. Please report this log.", kGameDeviceDoors);
 }
 
@@ -556,7 +617,7 @@ HRESULT STDMETHODCALLTYPE factoryCreateDevice(void* self, REFGUID guid, void** d
     const HRESULT hr = g_factories[Index].original(self, guid, device, outer);
     if (SUCCEEDED(hr) && device && *device && !outer) {
         guardedBudget(g_budgetDi, [&] {
-            captureKeyboard(*device, std::make_index_sequence<kGameDeviceDoors>{});
+            captureDevice(*device, std::make_index_sequence<kGameDeviceDoors>{});
         });
     }
     return hr;
