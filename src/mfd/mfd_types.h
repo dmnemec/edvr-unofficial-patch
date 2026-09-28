@@ -130,6 +130,28 @@ enum class MfdCompositorBackend : uint8_t {
     kD3D11SceneMesh  = 1   // Option B: Reserved slot for D3D11 scene draw injection
 };
 
+// Bitmask for contextual activity gating (Status.json Flags bit checking)
+enum MfdActivityMask : uint32_t {
+    kActivityAlways       = 0,
+    kActivityShip         = 1 << 0,  // Active in Ship (Flags bit 27)
+    kActivitySrv          = 1 << 1,  // Active in SRV (Flags bit 26)
+    kActivityFighter      = 1 << 2,  // Active in SLF Fighter (Flags bit 28)
+    kActivityOnFoot       = 1 << 3,  // Active On Foot
+    kActivityInFlight     = 1 << 4,  // Active only in Flight (not docked or landed)
+    kActivityDocked       = 1 << 5,  // Active when docked (Flags bit 0)
+    kActivityHardpoints   = 1 << 6,  // Active when hardpoints deployed (Flags bit 6)
+};
+
+// Color theme presets
+enum class MfdColorTheme : uint8_t {
+    kDefaultAmber = 0,   // Classic Orange HUD
+    kCyanIce      = 1,   // Ice Blue / Cyan
+    kMatrixGreen  = 2,   // Emerald / Matrix Green
+    kSolarWhite   = 3,   // High-Contrast White
+    kCrimson      = 4,   // Combat Red / Crimson
+    kPurpleHaze   = 5    // Violet / Amethyst
+};
+
 // Color representation for HUD rendering (RGBA8).
 struct MfdColor {
     uint8_t r = 0;
@@ -147,6 +169,23 @@ struct MfdColor {
                (static_cast<uint32_t>(g) << 8)  |
                static_cast<uint32_t>(r);
     }
+
+    constexpr bool operator==(const MfdColor& o) const {
+        return r == o.r && g == o.g && b == o.b && a == o.a;
+    }
+
+    constexpr bool operator!=(const MfdColor& o) const {
+        return !(*this == o);
+    }
+};
+
+struct MfdPaletteSet {
+    MfdColor mainColor;
+    MfdColor dimColor;
+    MfdColor brightColor;
+    MfdColor accentColor;
+    MfdColor borderColor;
+    MfdColor bgColor;
 };
 
 // Signature Elite Dangerous HUD color palette.
@@ -159,6 +198,42 @@ namespace palette {
     constexpr MfdColor kSuccessGreen(64, 255, 64, 255);   // Confirmed / active green
     constexpr MfdColor kBackground(14, 12, 10, 255);       // Solid opaque cockpit display backing
     constexpr MfdColor kFrameBorder(255, 120, 0, 255);     // Solid bright orange bezel border
+
+    inline MfdPaletteSet getTheme(MfdColorTheme theme) {
+        switch (theme) {
+            case MfdColorTheme::kCyanIce:
+                return {
+                    MfdColor(0, 180, 255), MfdColor(0, 90, 140), MfdColor(120, 225, 255),
+                    MfdColor(255, 175, 40), MfdColor(0, 190, 255), MfdColor(8, 14, 20)
+                };
+            case MfdColorTheme::kMatrixGreen:
+                return {
+                    MfdColor(50, 230, 80), MfdColor(25, 115, 40), MfdColor(140, 255, 160),
+                    MfdColor(0, 200, 255), MfdColor(60, 240, 90), MfdColor(8, 18, 10)
+                };
+            case MfdColorTheme::kSolarWhite:
+                return {
+                    MfdColor(220, 225, 235), MfdColor(110, 115, 125), MfdColor(255, 255, 255),
+                    MfdColor(0, 180, 255), MfdColor(230, 235, 245), MfdColor(12, 14, 18)
+                };
+            case MfdColorTheme::kCrimson:
+                return {
+                    MfdColor(255, 55, 55), MfdColor(140, 25, 25), MfdColor(255, 130, 130),
+                    MfdColor(255, 180, 50), MfdColor(255, 70, 70), MfdColor(20, 10, 10)
+                };
+            case MfdColorTheme::kPurpleHaze:
+                return {
+                    MfdColor(200, 100, 255), MfdColor(100, 50, 130), MfdColor(235, 170, 255),
+                    MfdColor(0, 200, 255), MfdColor(210, 110, 255), MfdColor(16, 10, 22)
+                };
+            case MfdColorTheme::kDefaultAmber:
+            default:
+                return {
+                    kAmberNormal, kAmberDim, kAmberBright,
+                    kCyanAccent, kFrameBorder, kBackground
+                };
+        }
+    }
 }
 
 } // namespace edvr::mfd

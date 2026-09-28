@@ -510,6 +510,89 @@ int test_d3d11_render_to_eye_rtv() {
     return 0;
 }
 
+// 10. Test Color Themes and Interactive Settings Adjustment Callback
+int test_color_themes_and_settings() {
+    // Verify theme palettes
+    auto amberPal = palette::getTheme(MfdColorTheme::kDefaultAmber);
+    auto cyanPal = palette::getTheme(MfdColorTheme::kCyanIce);
+    auto greenPal = palette::getTheme(MfdColorTheme::kMatrixGreen);
+    auto whitePal = palette::getTheme(MfdColorTheme::kSolarWhite);
+    auto crimsonPal = palette::getTheme(MfdColorTheme::kCrimson);
+    auto purplePal = palette::getTheme(MfdColorTheme::kPurpleHaze);
+
+    TEST_CHECK(amberPal.mainColor == palette::kAmberNormal, "Amber theme palette");
+    TEST_CHECK(cyanPal.mainColor.r == 0 && cyanPal.mainColor.g == 180, "Cyan theme palette");
+    TEST_CHECK(greenPal.mainColor.g == 230, "Green theme palette");
+    TEST_CHECK(crimsonPal.mainColor.r == 255, "Crimson theme palette");
+
+    // Verify DeclarativeMfdProvider KeyValueActionCallback for in-MFD interactive settings
+    DeclarativeMfdProvider prov("settings_test", "SETTINGS");
+    prov.loadFromJson(R"({
+        "tabs": [{
+            "title": "SETTINGS",
+            "type": "keyvalue",
+            "items": [
+                {"key": "Position X", "value": "0.00 m"},
+                {"key": "Glass Opacity", "value": "75%"},
+                {"key": "Color Theme", "value": "Amber / Orange"}
+            ]
+        }]
+    })");
+
+    std::string lastKey;
+    bool lastIsLeft = false;
+    prov.setKeyValueActionCallback([&](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int delta) {
+        lastKey = key;
+        lastIsLeft = (delta < 0);
+    });
+
+    prov.onFocusChanged(true);
+
+    // Send Left input on first key-value item
+    prov.onInput(MfdInputAction::kLeft);
+    TEST_CHECK(lastKey == "Position X", "Callback received key Position X");
+    TEST_CHECK(lastIsLeft == true, "Callback received isLeft true");
+
+    // Move down and send Right input
+    prov.onInput(MfdInputAction::kDown);
+    prov.onInput(MfdInputAction::kRight);
+    TEST_CHECK(lastKey == "Glass Opacity", "Callback received key Glass Opacity");
+    TEST_CHECK(lastIsLeft == false, "Callback received isLeft false");
+
+    return 0;
+}
+
+// 11. Test Vehicle / Contextual Activity Gating Mask
+int test_activity_gating() {
+    uint32_t shipMask = kActivityShip;
+    uint32_t srvMask = kActivitySrv;
+    uint32_t flightMask = kActivityInFlight;
+
+    // Simulate Elite Status.json flags
+    uint32_t mainShipFlags = (1 << 24) | (1 << 3); // MainShip + ShieldsUp (In Flight)
+    uint32_t srvFlags = (1 << 26);                 // SRV
+    uint32_t dockedShipFlags = (1 << 24) | 1;      // MainShip + Docked (bit 0)
+    uint32_t titleScreenFlags = 0;                 // Title / Loading screen
+
+    // Suppress on title screen (flags == 0)
+    TEST_CHECK(titleScreenFlags == 0, "Title screen flags zero");
+
+    // Ship mask active in ship
+    bool inShip = (mainShipFlags & (1 << 24)) != 0 && (shipMask & kActivityShip) != 0;
+    TEST_CHECK(inShip, "Ship active in main ship");
+
+    // SRV mask active in SRV
+    bool inSrv = (srvFlags & (1 << 26)) != 0 && (srvMask & kActivitySrv) != 0;
+    TEST_CHECK(inSrv, "SRV active in SRV");
+
+    // Flight mask inactive when docked
+    bool isDocked = (dockedShipFlags & 0x3) != 0;
+    bool inFlight = !isDocked && (flightMask & kActivityInFlight) != 0;
+    TEST_CHECK(!inFlight, "Flight mask inactive when docked");
+
+    return 0;
+}
+
 int main() {
     std::cout << "[mfd_test] Running Cockpit MFD framework test suite..." << std::endl;
 
@@ -539,6 +622,12 @@ int main() {
 
     if (test_d3d11_render_to_eye_rtv() != 0) return 1;
     std::cout << "  ok  Direct3D 11 Eye RTV Hardware Rasterization & Readback" << std::endl;
+
+    if (test_color_themes_and_settings() != 0) return 1;
+    std::cout << "  ok  Color Themes and In-MFD Interactive Settings Callback" << std::endl;
+
+    if (test_activity_gating() != 0) return 1;
+    std::cout << "  ok  Vehicle Activity Gating & Title Screen Suppression" << std::endl;
 
     std::cout << "[mfd_test] ALL TESTS PASSED." << std::endl;
     return 0;

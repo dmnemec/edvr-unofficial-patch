@@ -96,6 +96,12 @@ struct EliteStatusData {
 
 EliteStatusData readEliteStatus() {
     EliteStatusData data;
+    // When running in standalone test rigs outside the game, simulate an active cockpit
+    if (GetModuleHandleW(L"EliteDangerous64.exe") == nullptr) {
+        data.flags = (1 << 24) | (1 << 3); // MainShip + ShieldsUp
+        return data;
+    }
+
     std::wstring statusPath = getSavedGamesEliteDir() + L"\\Status.json";
     std::ifstream f(statusPath);
     if (!f.is_open()) return data;
@@ -164,52 +170,129 @@ EliteStatusData readEliteStatus() {
     return data;
 }
 
-void ensureSettingsTab(MfdViewModel& model, const std::string& slotName) {
+const char* themeName(MfdColorTheme theme) {
+    switch (theme) {
+        case MfdColorTheme::kDefaultAmber: return "Amber / Orange";
+        case MfdColorTheme::kCyanIce:      return "Cyan / Ice";
+        case MfdColorTheme::kMatrixGreen:  return "Matrix Green";
+        case MfdColorTheme::kSolarWhite:   return "Solar White";
+        case MfdColorTheme::kCrimson:      return "Crimson Red";
+        case MfdColorTheme::kPurpleHaze:   return "Purple Haze";
+        default:                           return "Amber / Orange";
+    }
+}
+
+bool isActivityActive(uint32_t mask, uint32_t flags) {
+    if (flags == 0) return false; // Suppress during title, loading, main menu
+    if (mask == kActivityAlways) return true;
+
+    bool inShip = (flags & (1 << 24)) != 0 || ((flags & ((1 << 25) | (1 << 26))) == 0);
+    bool inSrv = (flags & (1 << 26)) != 0;
+    bool inFighter = (flags & (1 << 25)) != 0;
+    bool isDocked = (flags & 0x3) != 0; // Docked or Landed
+    bool inFlight = !isDocked;
+    bool hardpoints = (flags & (1 << 6)) != 0;
+
+    if ((mask & kActivityShip) && inShip) return true;
+    if ((mask & kActivitySrv) && inSrv) return true;
+    if ((mask & kActivityFighter) && inFighter) return true;
+    if ((mask & kActivityInFlight) && inFlight) return true;
+    if ((mask & kActivityDocked) && isDocked) return true;
+    if ((mask & kActivityHardpoints) && hardpoints) return true;
+
+    return false;
+}
+
+void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) {
+    bool isLeft = (delta < 0);
+    float step = isLeft ? -1.0f : 1.0f;
+    if (key == "Position X") {
+        slot.pose.position.x += step * 0.02f;
+    } else if (key == "Position Y") {
+        slot.pose.position.y += step * 0.02f;
+    } else if (key == "Position Z") {
+        slot.pose.position.z += step * 0.02f;
+    } else if (key == "Pitch") {
+        slot.pitchDeg += step * 2.0f;
+        slot.pose.orientation = Quat::fromEulerDegrees(slot.pitchDeg, slot.yawDeg, 0.0f);
+    } else if (key == "Yaw") {
+        slot.yawDeg += step * 2.0f;
+        slot.pose.orientation = Quat::fromEulerDegrees(slot.pitchDeg, slot.yawDeg, 0.0f);
+    } else if (key == "Glass Opacity") {
+        slot.opacity = (std::clamp)(slot.opacity + step * 0.05f, 0.10f, 1.0f);
+    } else if (key == "Display Scale") {
+        slot.scale = (std::clamp)(slot.scale + step * 0.05f, 0.50f, 2.0f);
+        float baseW = (slot.name == "main_mfd") ? 0.28f : 0.24f;
+        float baseH = (slot.name == "main_mfd") ? 0.18f : 0.16f;
+        slot.pose.widthM = baseW * slot.scale;
+        slot.pose.heightM = baseH * slot.scale;
+    } else if (key == "Color Theme") {
+        int themeIdx = static_cast<int>(slot.theme);
+        themeIdx = (themeIdx + (isLeft ? 5 : 1)) % 6;
+        slot.theme = static_cast<MfdColorTheme>(themeIdx);
+    } else if (key == "Auto-Hide Gaze") {
+        slot.autoHideUntilGaze = !slot.autoHideUntilGaze;
+    } else if (key == "Gaze Dwell Delay") {
+        float dt = slot.gazeTracker.dwellTimeThreshold() + step * 0.05f;
+        slot.gazeTracker.setDwellTimeThreshold((std::clamp)(dt, 0.0f, 1.0f));
+    } else if (key == "Off-Center Y") {
+        float offY = slot.gazeTracker.anchorOffsetY() + step * 0.05f;
+        slot.gazeTracker.setAnchorOffset(0.0f, (std::clamp)(offY, -0.5f, 0.5f));
+    }
+}
+
+void ensureSettingsTab(MfdSlot& slot) {
+    if (!slot.provider) return;
+    auto& model = slot.provider->viewModel();
+    MfdTab* settingsTab = nullptr;
     for (auto& tab : model.tabs) {
         if (tab.title == "SETTINGS") {
-            // Update settings key values dynamically
-            tab.keyValues.clear();
-            float posX = 0.0f, posY = 0.0f, posZ = 0.0f, pitch = 0.0f, yaw = 0.0f;
-            if (slotName == "main_mfd") {
-                posX = edvr::Config::get().getFloat("fix.mfd_pos_x", 0.0f);
-                posY = edvr::Config::get().getFloat("fix.mfd_pos_y", -0.16f);
-                posZ = edvr::Config::get().getFloat("fix.mfd_pos_z", -0.55f);
-                pitch = edvr::Config::get().getFloat("fix.mfd_pitch", -20.0f);
-                yaw = edvr::Config::get().getFloat("fix.mfd_yaw", 0.0f);
-            } else if (slotName == "left_mfd") {
-                posX = -0.45f; posY = -0.22f; posZ = -0.48f;
-                pitch = -22.0f; yaw = 32.0f;
-            } else if (slotName == "right_mfd") {
-                posX = 0.45f; posY = -0.22f; posZ = -0.48f;
-                pitch = -22.0f; yaw = -32.0f;
-            }
-
-            float scale = edvr::Config::get().getFloat("fix.mfd_scale", 1.0f);
-            float opacity = edvr::Config::get().getFloat("fix.mfd_opacity", 0.75f);
-
-            char buf[64];
-            snprintf(buf, sizeof(buf), "(%.2f, %.2f, %.2f) m", posX, posY, posZ);
-            tab.keyValues.push_back({"Position XYZ", buf, palette::kAmberBright});
-
-            snprintf(buf, sizeof(buf), "Pitch %.0f*, Yaw %.0f*", pitch, yaw);
-            tab.keyValues.push_back({"Perspective Tilt", buf, palette::kAmberBright});
-
-            snprintf(buf, sizeof(buf), "%.0f%%", opacity * 100.0f);
-            tab.keyValues.push_back({"Glass Opacity", buf, palette::kCyanAccent});
-
-            snprintf(buf, sizeof(buf), "%.2fx", scale);
-            tab.keyValues.push_back({"Display Scale", buf, palette::kAmberNormal});
-
-            tab.keyValues.push_back({"Head-Look Align", "Enabled (Perspective)", palette::kSuccessGreen});
-            return;
+            settingsTab = &tab;
+            break;
         }
     }
+    if (!settingsTab) {
+        MfdTab newTab;
+        newTab.title = "SETTINGS";
+        newTab.type = MfdTabType::kKeyValue;
+        model.tabs.push_back(std::move(newTab));
+        settingsTab = &model.tabs.back();
+    }
 
-    // Add SETTINGS tab if not present
-    MfdTab settingsTab;
-    settingsTab.title = "SETTINGS";
-    settingsTab.type = MfdTabType::kKeyValue;
-    model.tabs.push_back(std::move(settingsTab));
+    settingsTab->keyValues.clear();
+    char buf[64];
+
+    snprintf(buf, sizeof(buf), "%+.2f m", slot.pose.position.x);
+    settingsTab->keyValues.push_back({"Position X", buf, palette::kAmberBright});
+
+    snprintf(buf, sizeof(buf), "%+.2f m", slot.pose.position.y);
+    settingsTab->keyValues.push_back({"Position Y", buf, palette::kAmberBright});
+
+    snprintf(buf, sizeof(buf), "%+.2f m", slot.pose.position.z);
+    settingsTab->keyValues.push_back({"Position Z", buf, palette::kAmberBright});
+
+    snprintf(buf, sizeof(buf), "%.0f deg", slot.pitchDeg);
+    settingsTab->keyValues.push_back({"Pitch", buf, palette::kAmberBright});
+
+    snprintf(buf, sizeof(buf), "%.0f deg", slot.yawDeg);
+    settingsTab->keyValues.push_back({"Yaw", buf, palette::kAmberBright});
+
+    snprintf(buf, sizeof(buf), "%.0f%%", slot.opacity * 100.0f);
+    settingsTab->keyValues.push_back({"Glass Opacity", buf, palette::kCyanAccent});
+
+    snprintf(buf, sizeof(buf), "%.2fx", slot.scale);
+    settingsTab->keyValues.push_back({"Display Scale", buf, palette::kAmberNormal});
+
+    settingsTab->keyValues.push_back({"Color Theme", themeName(slot.theme), palette::kCyanAccent});
+
+    settingsTab->keyValues.push_back({"Auto-Hide Gaze", slot.autoHideUntilGaze ? "Enabled (Fade)" : "Disabled (Always On)",
+                                      slot.autoHideUntilGaze ? palette::kSuccessGreen : palette::kAmberDim});
+
+    snprintf(buf, sizeof(buf), "%.2f s", slot.gazeTracker.dwellTimeThreshold());
+    settingsTab->keyValues.push_back({"Gaze Dwell Delay", buf, palette::kAmberNormal});
+
+    snprintf(buf, sizeof(buf), "%+.2f", slot.gazeTracker.anchorOffsetY());
+    settingsTab->keyValues.push_back({"Off-Center Y", buf, palette::kAmberNormal});
 }
 } // namespace
 
@@ -330,6 +413,21 @@ void MfdManager::ensureDefaultSlots() {
             }
         });
         addSlot("main_mfd", std::move(providerCenter), poseCenter);
+        auto* slot0 = findSlot("main_mfd");
+        if (slot0) {
+            slot0->pitchDeg = pitchDeg;
+            slot0->yawDeg = yawDeg;
+            slot0->scale = s;
+            slot0->opacity = edvr::Config::get().getFloat("fix.mfd_opacity", 0.75f);
+            slot0->baselinePose = poseCenter;
+            slot0->activityMask = kActivityAlways;
+            if (slot0->provider && slot0->provider->type() == MfdProviderType::kDeclarativeJson) {
+                auto* decl = static_cast<DeclarativeMfdProvider*>(slot0->provider.get());
+                decl->setKeyValueActionCallback([slot0](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int adjustDelta) {
+                    handleSettingsAdjustment(*slot0, key, adjustDelta);
+                });
+            }
+        }
     }
 
     // Slot 1: Left Console (left_mfd - Power & Engineering)
@@ -409,6 +507,21 @@ void MfdManager::ensureDefaultSlots() {
             }
         });
         addSlot("left_mfd", std::move(providerLeft), poseLeft);
+        auto* slot1 = findSlot("left_mfd");
+        if (slot1) {
+            slot1->pitchDeg = -22.0f;
+            slot1->yawDeg = 32.0f;
+            slot1->scale = s;
+            slot1->opacity = 0.75f;
+            slot1->baselinePose = poseLeft;
+            slot1->activityMask = kActivityShip | kActivityFighter;
+            if (slot1->provider && slot1->provider->type() == MfdProviderType::kDeclarativeJson) {
+                auto* decl = static_cast<DeclarativeMfdProvider*>(slot1->provider.get());
+                decl->setKeyValueActionCallback([slot1](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int adjustDelta) {
+                    handleSettingsAdjustment(*slot1, key, adjustDelta);
+                });
+            }
+        }
     }
 
     // Slot 2: Right Console (right_mfd - Exobiology & Sector Analysis)
@@ -450,6 +563,21 @@ void MfdManager::ensureDefaultSlots() {
         "}";
         providerRight->loadFromJson(jsonRight);
         addSlot("right_mfd", std::move(providerRight), poseRight);
+        auto* slot2 = findSlot("right_mfd");
+        if (slot2) {
+            slot2->pitchDeg = -22.0f;
+            slot2->yawDeg = -32.0f;
+            slot2->scale = s;
+            slot2->opacity = 0.75f;
+            slot2->baselinePose = poseRight;
+            slot2->activityMask = kActivityAlways;
+            if (slot2->provider && slot2->provider->type() == MfdProviderType::kDeclarativeJson) {
+                auto* decl = static_cast<DeclarativeMfdProvider*>(slot2->provider.get());
+                decl->setKeyValueActionCallback([slot2](const std::string& /*tabTitle*/, int /*index*/, const std::string& key, int adjustDelta) {
+                    handleSettingsAdjustment(*slot2, key, adjustDelta);
+                });
+            }
+        }
     }
 
     // Adjust visibility based on requestedSlots
@@ -498,6 +626,7 @@ bool MfdManager::addSlot(std::string name, std::unique_ptr<IMfdProvider> provide
     MfdSlot slot;
     slot.name = std::move(name);
     slot.pose = pose;
+    slot.baselinePose = pose;
     slot.provider = std::move(provider);
     slot.renderer = std::make_unique<MfdRenderer>(m_renderWidth, m_renderHeight);
     slot.isVisible = true;
@@ -514,8 +643,11 @@ MfdSlot* MfdManager::findSlot(const std::string& name) {
 }
 
 MfdSlot* MfdManager::focusedSlot() {
+    EliteStatusData status = readEliteStatus();
     for (auto& slot : m_slots) {
-        if (slot.gazeTracker.isFocused()) return &slot;
+        if (slot.isVisible && isActivityActive(slot.activityMask, status.flags) && slot.gazeTracker.isFocused()) {
+            return &slot;
+        }
     }
     return nullptr;
 }
@@ -526,49 +658,41 @@ void MfdManager::update(const Vec3& headPos, const Vec3& headForward, float dtSe
     if (!isEnabled()) return;
     ensureDefaultSlots();
 
-    // Live update main MFD slot transform from config settings
-    float posX = edvr::Config::get().getFloat("fix.mfd_pos_x", 0.0f);
-    float posY = edvr::Config::get().getFloat("fix.mfd_pos_y", -0.16f);
-    float posZ = edvr::Config::get().getFloat("fix.mfd_pos_z", -0.55f);
-    float pitchDeg = edvr::Config::get().getFloat("fix.mfd_pitch", -20.0f);
-    float yawDeg = edvr::Config::get().getFloat("fix.mfd_yaw", 0.0f);
-    float scale = edvr::Config::get().getFloat("fix.mfd_scale", 1.0f);
-    float s = (scale > 0.1f ? scale : 1.0f);
-
-    auto* mainSlot = findSlot("main_mfd");
-    if (mainSlot) {
-        mainSlot->pose.position = Vec3(posX, posY, posZ);
-        mainSlot->pose.orientation = Quat::fromEulerDegrees(pitchDeg, yawDeg, 0.0f);
-        mainSlot->pose.widthM = 0.28f * s;
-        mainSlot->pose.heightM = 0.18f * s;
-    }
-
-    auto* leftSlot = findSlot("left_mfd");
-    if (leftSlot) {
-        leftSlot->pose.widthM = 0.24f * s;
-        leftSlot->pose.heightM = 0.16f * s;
-    }
-
-    auto* rightSlot = findSlot("right_mfd");
-    if (rightSlot) {
-        rightSlot->pose.widthM = 0.24f * s;
-        rightSlot->pose.heightM = 0.16f * s;
-    }
+    EliteStatusData status = readEliteStatus();
+    bool inCockpit = (status.flags != 0);
 
     for (auto& slot : m_slots) {
         if (!slot.isVisible || !slot.provider) continue;
 
-        // Step 1: Update provider internal data / timers
-        slot.provider->update(dtSeconds);
+        bool active = inCockpit && isActivityActive(slot.activityMask, status.flags);
 
-        // Step 2: Ensure persistent SETTINGS tab is up-to-date with live transforms
-        ensureSettingsTab(slot.provider->viewModel(), slot.name);
+        // Update provider internal data / timers
+        if (active) {
+            slot.provider->update(dtSeconds);
+        }
 
-        // Step 3: Track head gaze and evaluate focus state
+        // Ensure persistent SETTINGS tab is up-to-date with live transforms
+        ensureSettingsTab(slot);
+
+        if (!active) {
+            slot.currentAlpha = 0.0f;
+            continue;
+        }
+
+        // Track head gaze and evaluate focus state
         MfdFocusState prevState = slot.gazeTracker.currentState();
         MfdFocusState newState = slot.gazeTracker.update(headPos, headForward, slot.pose, dtSeconds);
 
-        // Step 4: Notify provider if focus state crossed threshold
+        // Update smooth alpha for auto-hide
+        if (slot.autoHideUntilGaze) {
+            float targetAlpha = (slot.gazeTracker.isFocused() || slot.gazeTracker.dwellProgress() > 0.05f)
+                                ? slot.gazeTracker.dwellProgress() * slot.opacity : 0.0f;
+            slot.currentAlpha += (targetAlpha - slot.currentAlpha) * std::clamp(dtSeconds * 12.0f, 0.0f, 1.0f);
+        } else {
+            slot.currentAlpha = slot.opacity;
+        }
+
+        // Notify provider if focus state crossed threshold
         bool wasFocused = (prevState == MfdFocusState::kFocused);
         bool isFocused = (newState == MfdFocusState::kFocused);
         if (wasFocused != isFocused) {
@@ -580,13 +704,15 @@ void MfdManager::update(const Vec3& headPos, const Vec3& headForward, float dtSe
 void MfdManager::render() {
     if (!isEnabled()) return;
     ensureDefaultSlots();
-    float opacity = edvr::Config::get().getFloat("fix.mfd_opacity", 0.75f);
 
+    EliteStatusData status = readEliteStatus();
     for (auto& slot : m_slots) {
         if (!slot.isVisible || !slot.provider || !slot.renderer) continue;
+        if (!isActivityActive(slot.activityMask, status.flags)) continue;
+        if (slot.currentAlpha < 0.01f) continue;
 
-        // Rasterize view model into pixel buffer
-        slot.renderer->render(slot.provider->viewModel(), opacity);
+        // Rasterize view model into pixel buffer with slot theme and alpha
+        slot.renderer->render(slot.provider->viewModel(), slot.currentAlpha, slot.theme);
 
         // Submit rendered frame to active compositor
         if (m_compositor && m_compositor->isReady()) {
@@ -632,8 +758,11 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
         context->OMSetBlendState(alphaBlendState.Get(), nullptr, 0xFFFFFFFF);
     }
 
+    EliteStatusData status = readEliteStatus();
     for (auto& slot : m_slots) {
         if (!slot.isVisible || !slot.renderer) continue;
+        if (!isActivityActive(slot.activityMask, status.flags)) continue;
+        if (slot.currentAlpha < 0.01f) continue;
 
         Vec3 eyeLocal;
         if (headLocked) {

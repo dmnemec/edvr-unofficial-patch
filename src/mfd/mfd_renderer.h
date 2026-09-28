@@ -24,8 +24,12 @@ public:
 
     void resize(int width, int height);
 
+    // Set active color theme
+    void setTheme(MfdColorTheme theme) { m_theme = theme; }
+    MfdColorTheme theme() const { return m_theme; }
+
     // Render the complete view model onto the internal pixel buffer.
-    void render(const MfdViewModel& model, float backgroundOpacity = 0.75f);
+    void render(const MfdViewModel& model, float backgroundOpacity = 0.75f, MfdColorTheme theme = MfdColorTheme::kDefaultAmber);
 
     // D3D11 Shader Resource View helper for rendering onto eye swapchains:
     void createOrUpdateD3D11Srv(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11ShaderResourceView** outSrv);
@@ -44,6 +48,7 @@ public:
 private:
     int m_width;
     int m_height;
+    MfdColorTheme m_theme = MfdColorTheme::kDefaultAmber;
     std::vector<uint32_t> m_pixels; // RGBA8 packed
 
     ComPtr<ID3D11Texture2D> m_d3dTexture;

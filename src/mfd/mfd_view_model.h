@@ -112,6 +112,13 @@ struct MfdViewModel {
             } else if (tab->selectedIndex >= tab->scrollOffset + visibleRows) {
                 tab->scrollOffset = tab->selectedIndex - visibleRows + 1;
             }
+        } else if (tab->type == MfdTabType::kKeyValue && !tab->keyValues.empty()) {
+            int newIdx = tab->selectedIndex + delta;
+            if (newIdx < 0) newIdx = 0;
+            if (newIdx >= static_cast<int>(tab->keyValues.size())) {
+                newIdx = static_cast<int>(tab->keyValues.size()) - 1;
+            }
+            tab->selectedIndex = newIdx;
         } else if (tab->type == MfdTabType::kText && !tab->lines.empty()) {
             int newScroll = tab->textScrollLine + delta;
             if (newScroll < 0) newScroll = 0;

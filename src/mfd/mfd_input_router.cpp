@@ -1,8 +1,40 @@
 #include "mfd_input_router.h"
+#include <windows.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
 
 namespace edvr::mfd {
 
 MfdInputRouter::MfdInputRouter() = default;
+
+void MfdInputRouter::pollJoystickInputs(bool& up, bool& down, bool& left, bool& right,
+                                        bool& sel, bool& back, bool& next, bool& prev) {
+    UINT numDevs = joyGetNumDevs();
+    if (numDevs > 16) numDevs = 16;
+    for (UINT i = 0; i < numDevs; ++i) {
+        JOYINFOEX ji{};
+        ji.dwSize = sizeof(JOYINFOEX);
+        ji.dwFlags = JOY_RETURNALL;
+        if (joyGetPosEx(i, &ji) == JOYERR_NOERROR) {
+            // Check POV Hat (dwPOV: hundredths of degrees, 65535 = centered)
+            if (ji.dwPOV != 65535 && ji.dwPOV <= 35900) {
+                if (ji.dwPOV >= 31500 || ji.dwPOV <= 4500) up = true;
+                if (ji.dwPOV >= 4500 && ji.dwPOV <= 13500) right = true;
+                if (ji.dwPOV >= 13500 && ji.dwPOV <= 22500) down = true;
+                if (ji.dwPOV >= 22500 && ji.dwPOV <= 31500) left = true;
+            }
+            // Check standard D-pad buttons / Secondary menu buttons:
+            // Button 1 (0x1) = Select/Fire
+            // Button 2 (0x2) = Back/Cancel
+            // Button 3 (0x4) = Prev Tab (Q)
+            // Button 4 (0x8) = Next Tab (E)
+            if (ji.dwButtons & 0x01) sel = true;
+            if (ji.dwButtons & 0x02) back = true;
+            if (ji.dwButtons & 0x04) prev = true;
+            if (ji.dwButtons & 0x08) next = true;
+        }
+    }
+}
 
 bool MfdInputRouter::processInput(bool isMfdFocused, IMfdProvider* activeProvider,
                                  bool keyDownUp, bool keyDownDown, bool keyDownLeft, bool keyDownRight,

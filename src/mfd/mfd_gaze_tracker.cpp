@@ -18,7 +18,8 @@ float MfdGazeTracker::computeGazeAngle(const Vec3& headPos, const Vec3& headForw
 }
 
 bool MfdGazeTracker::testRayIntersection(const Vec3& headPos, const Vec3& headDir,
-                                        const MfdPose& mfdPose, float* outDistance) {
+                                        const MfdPose& mfdPose, float* outDistance,
+                                        float anchorOffsetX, float anchorOffsetY) {
     // Normal facing the pilot (in local MFD space, +Z faces toward viewer)
     Vec3 normal = mfdPose.orientation.rotate(Vec3(0, 0, 1.0f));
 
@@ -40,11 +41,12 @@ bool MfdGazeTracker::testRayIntersection(const Vec3& headPos, const Vec3& headDi
     Vec3 localRight = mfdPose.orientation.rotate(Vec3(1.0f, 0, 0));
     Vec3 localUp = mfdPose.orientation.rotate(Vec3(0, 1.0f, 0));
 
-    float projX = localHit.dot(localRight);
-    float projY = localHit.dot(localUp);
-
     float halfW = mfdPose.widthM * 0.5f;
     float halfH = mfdPose.heightM * 0.5f;
+
+    // Offset the center of focus if configured (e.g. anchor focus to lower part of screen)
+    float projX = localHit.dot(localRight) - (anchorOffsetX * halfW);
+    float projY = localHit.dot(localUp) - (anchorOffsetY * halfH);
 
     // 50% margin around display bounds for natural head-look acquisition
     constexpr float kHitMargin = 1.5f;
@@ -53,13 +55,20 @@ bool MfdGazeTracker::testRayIntersection(const Vec3& headPos, const Vec3& headDi
 
 MfdFocusState MfdGazeTracker::update(const Vec3& headPos, const Vec3& headForward,
                                     const MfdPose& mfdPose, float dtSeconds) {
-    m_lastGazeAngleDeg = computeGazeAngle(headPos, headForward, mfdPose.position);
+    // Offset target center if configured
+    Vec3 localRight = mfdPose.orientation.rotate(Vec3(1.0f, 0, 0));
+    Vec3 localUp = mfdPose.orientation.rotate(Vec3(0, 1.0f, 0));
+    Vec3 anchorPos = mfdPose.position +
+                     (localRight * (m_anchorOffsetX * mfdPose.widthM * 0.5f)) +
+                     (localUp * (m_anchorOffsetY * mfdPose.heightM * 0.5f));
+
+    m_lastGazeAngleDeg = computeGazeAngle(headPos, headForward, anchorPos);
 
     // Gaze is considered on-target if ray intersects surface OR angle is within acquisition cone
-    bool rayHits = testRayIntersection(headPos, headForward, mfdPose);
+    bool rayHits = testRayIntersection(headPos, headForward, mfdPose, nullptr, m_anchorOffsetX, m_anchorOffsetY);
 
     // Dynamic angular radius adapts to any distance, position, scale, or tilt
-    float dist = (mfdPose.position - headPos).length();
+    float dist = (anchorPos - headPos).length();
     float mfdRadius = std::sqrt(mfdPose.widthM * mfdPose.widthM + mfdPose.heightM * mfdPose.heightM) * 0.5f;
     float angularRadiusDeg = (dist > 1e-3f) ? (std::atan2(mfdRadius * 1.5f, dist) * kRadToDeg) : m_coneAngleDegrees;
     float effectiveCone = (std::max)(m_coneAngleDegrees, angularRadiusDeg);

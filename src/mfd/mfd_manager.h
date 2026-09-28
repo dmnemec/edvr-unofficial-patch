@@ -22,10 +22,20 @@ namespace edvr::mfd {
 struct MfdSlot {
     std::string name;
     MfdPose pose;
+    MfdPose baselinePose; // Default rest pose
+    float pitchDeg = 0.0f;
+    float yawDeg = 0.0f;
+    float scale = 1.0f;
     std::unique_ptr<IMfdProvider> provider;
     std::unique_ptr<MfdRenderer> renderer;
     MfdGazeTracker gazeTracker;
     bool isVisible = true;
+    bool autoHideUntilGaze = false; // Invisible until gaze activated
+    float opacity = 0.75f;
+    MfdColorTheme theme = MfdColorTheme::kDefaultAmber;
+    uint32_t activityMask = kActivityAlways; // Vehicle / state gating
+    float currentAlpha = 1.0f; // Smooth fade transition for auto-hide
+    float maxPerspectiveTilt = 25.0f; // Max angular deviation limit from baseline
 };
 
 // Central manager coordinating in-cockpit MFD displays, gaze tracking,

@@ -153,21 +153,23 @@ void MfdRenderer::drawTextRight(int rightX, int y, const std::string& text, MfdC
     drawText(rightX - textW, y, text, color, scale);
 }
 
-void MfdRenderer::render(const MfdViewModel& model, float backgroundOpacity) {
+void MfdRenderer::render(const MfdViewModel& model, float backgroundOpacity, MfdColorTheme theme) {
+    auto paletteSet = palette::getTheme(theme);
+
     // 1. Translucent dark cockpit glass background
     uint8_t bgAlpha = static_cast<uint8_t>(std::clamp(backgroundOpacity, 0.0f, 1.0f) * 255.0f);
-    MfdColor bgColor(10, 12, 16, bgAlpha);
+    MfdColor bgColor(paletteSet.bgColor.r, paletteSet.bgColor.g, paletteSet.bgColor.b, bgAlpha);
     clear(bgColor);
 
     if (bgAlpha > 20) {
         // Subtle cathode scanlines
-        drawScanlines(MfdColor(5, 6, 8, static_cast<uint8_t>(bgAlpha * 0.75f)), 3);
+        drawScanlines(MfdColor(paletteSet.bgColor.r / 2, paletteSet.bgColor.g / 2, paletteSet.bgColor.b / 2, static_cast<uint8_t>(bgAlpha * 0.75f)), 3);
     }
 
     // Color theme based on focus state:
-    MfdColor mainColor = model.isFocused ? palette::kAmberBright : palette::kAmberNormal;
-    MfdColor dimColor = model.isFocused ? palette::kAmberNormal : palette::kAmberDim;
-    MfdColor borderColor = model.isFocused ? palette::kAmberBright : palette::kFrameBorder;
+    MfdColor mainColor = model.isFocused ? paletteSet.brightColor : paletteSet.mainColor;
+    MfdColor dimColor = model.isFocused ? paletteSet.mainColor : paletteSet.dimColor;
+    MfdColor borderColor = model.isFocused ? paletteSet.brightColor : paletteSet.borderColor;
 
     // 2. Outer cockpit bezel frame and corner brackets:
     int margin = 4;
@@ -326,19 +328,26 @@ void MfdRenderer::renderKeyValueTab(const MfdTab& tab, MfdColor mainColor, MfdCo
     for (size_t i = 0; i < tab.keyValues.size() && static_cast<int>(i) < maxRows; ++i) {
         const auto& kv = tab.keyValues[i];
         int y = startY + static_cast<int>(i) * rowH;
+        bool isSelected = (static_cast<int>(i) == tab.selectedIndex);
 
-        // Key on left (dim/amber)
-        drawText(20, y, kv.key, dimColor, 1);
+        if (isSelected) {
+            drawRectFilled(14, y - 2, m_width - 28, rowH, MfdColor(mainColor.r / 5, mainColor.g / 5, mainColor.b / 5, 140));
+            drawLine(14, y - 2, 14, y + rowH - 3, mainColor);
+            drawText(20, y, kv.key, mainColor, 1);
+        } else {
+            // Key on left (dim/amber)
+            drawText(20, y, kv.key, dimColor, 1);
+        }
 
         // Dotted leader line between key and value
         int dotStart = 24 + static_cast<int>(kv.key.size()) * 8;
         int dotEnd = m_width - 32 - static_cast<int>(kv.value.size()) * 8;
         for (int dx = dotStart; dx < dotEnd; dx += 12) {
-            drawPixel(dx, y + 8, palette::kAmberDim);
+            drawPixel(dx, y + 8, isSelected ? mainColor : palette::kAmberDim);
         }
 
         // Value on right
-        drawTextRight(m_width - 24, y, kv.value, kv.valueColor, 1);
+        drawTextRight(m_width - 24, y, kv.value, isSelected ? mainColor : kv.valueColor, 1);
     }
 }
 

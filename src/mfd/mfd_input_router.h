@@ -44,18 +44,25 @@ public:
                       bool keyDownUp, bool keyDownDown, bool keyDownLeft, bool keyDownRight,
                       bool keyDownSelect, bool keyDownBack, bool keyDownNextTab, bool keyDownPrevTab);
 
-    // Convenience poller using virtual keys and external key-state checker.
+    void pollJoystickInputs(bool& up, bool& down, bool& left, bool& right,
+                            bool& sel, bool& back, bool& next, bool& prev);
+
+    // Convenience poller using virtual keys, joystick/vJoy devices, and external key-state checker.
     // isKeyDownFn is a predicate (e.g. [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; })
     template <typename Fn>
     bool pollAndRoute(bool isMfdFocused, IMfdProvider* activeProvider, Fn&& isKeyDownFn) {
-        bool up = isKeyDownFn(m_mapping.vkUp) || isKeyDownFn(m_mapping.vkUpAlt);
-        bool down = isKeyDownFn(m_mapping.vkDown) || isKeyDownFn(m_mapping.vkDownAlt);
-        bool left = isKeyDownFn(m_mapping.vkLeft) || isKeyDownFn(m_mapping.vkLeftAlt);
-        bool right = isKeyDownFn(m_mapping.vkRight) || isKeyDownFn(m_mapping.vkRightAlt);
-        bool sel = isKeyDownFn(m_mapping.vkSelect) || isKeyDownFn(m_mapping.vkSelectAlt);
-        bool back = isKeyDownFn(m_mapping.vkBack) || isKeyDownFn(m_mapping.vkBackAlt);
-        bool next = isKeyDownFn(m_mapping.vkNextTab);
-        bool prev = isKeyDownFn(m_mapping.vkPrevTab);
+        bool jUp = false, jDown = false, jLeft = false, jRight = false;
+        bool jSel = false, jBack = false, jNext = false, jPrev = false;
+        pollJoystickInputs(jUp, jDown, jLeft, jRight, jSel, jBack, jNext, jPrev);
+
+        bool up = isKeyDownFn(m_mapping.vkUp) || isKeyDownFn(m_mapping.vkUpAlt) || jUp;
+        bool down = isKeyDownFn(m_mapping.vkDown) || isKeyDownFn(m_mapping.vkDownAlt) || jDown;
+        bool left = isKeyDownFn(m_mapping.vkLeft) || isKeyDownFn(m_mapping.vkLeftAlt) || jLeft;
+        bool right = isKeyDownFn(m_mapping.vkRight) || isKeyDownFn(m_mapping.vkRightAlt) || jRight;
+        bool sel = isKeyDownFn(m_mapping.vkSelect) || isKeyDownFn(m_mapping.vkSelectAlt) || jSel;
+        bool back = isKeyDownFn(m_mapping.vkBack) || isKeyDownFn(m_mapping.vkBackAlt) || jBack;
+        bool next = isKeyDownFn(m_mapping.vkNextTab) || jNext;
+        bool prev = isKeyDownFn(m_mapping.vkPrevTab) || jPrev;
 
         return processInput(isMfdFocused, activeProvider, up, down, left, right, sel, back, next, prev);
     }
