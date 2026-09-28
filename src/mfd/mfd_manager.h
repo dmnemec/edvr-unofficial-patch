@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mfd_types.h"
+#include "mfd_view_model.h"
 #include "mfd_provider.h"
 #include "mfd_renderer.h"
 #include "mfd_gaze_tracker.h"
@@ -32,6 +33,7 @@ struct MfdSlot {
     MfdGazeTracker gazeTracker;
     bool isVisible = true;
     bool autoHideUntilGaze = false; // Invisible until gaze activated
+    bool trackingLocked = true; // true: locked to cockpit 3D space, false: freemove HUD attached to head
     float opacity = 0.75f;
     MfdColorTheme theme = MfdColorTheme::kDefaultAmber;
     bool useCustomColor = false;
@@ -115,10 +117,17 @@ private:
     int m_renderHeight = 384;
     DebugStats m_debugStats;
 
+    Vec3 m_lastHeadPos{0.0f, 0.0f, 0.0f};
+    Quat m_lastHeadRot{0.0f, 0.0f, 0.0f, 1.0f};
+
     std::vector<MfdSlot> m_slots;
     MfdInputRouter m_inputRouter;
     std::unique_ptr<IMfdCompositor> m_compositor;
     Microsoft::WRL::ComPtr<ID3D11BlendState> m_blendState;
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> m_quadVs;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_quadPs;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_quadCb;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_quadSampler;
 
     void ensureDefaultSlots();
 };

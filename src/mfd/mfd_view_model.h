@@ -119,6 +119,14 @@ struct MfdViewModel {
                 newIdx = static_cast<int>(tab->keyValues.size()) - 1;
             }
             tab->selectedIndex = newIdx;
+
+            // Ensure selection is visible within viewport
+            int kvVisibleRows = 11;
+            if (tab->selectedIndex < tab->scrollOffset) {
+                tab->scrollOffset = tab->selectedIndex;
+            } else if (tab->selectedIndex >= tab->scrollOffset + kvVisibleRows) {
+                tab->scrollOffset = tab->selectedIndex - kvVisibleRows + 1;
+            }
         } else if (tab->type == MfdTabType::kText && !tab->lines.empty()) {
             int newScroll = tab->textScrollLine + delta;
             if (newScroll < 0) newScroll = 0;

@@ -340,11 +340,17 @@ void MfdRenderer::renderKeyValueTab(const MfdTab& tab, MfdColor mainColor, MfdCo
     int startY = 74;
     int rowH = 22;
     int maxRows = (m_height - startY - 34) / rowH;
+    if (maxRows <= 0) maxRows = 1;
 
-    for (size_t i = 0; i < tab.keyValues.size() && static_cast<int>(i) < maxRows; ++i) {
-        const auto& kv = tab.keyValues[i];
-        int y = startY + static_cast<int>(i) * rowH;
-        bool isSelected = (static_cast<int>(i) == tab.selectedIndex);
+    int totalItems = static_cast<int>(tab.keyValues.size());
+    int maxScroll = (std::max)(0, totalItems - maxRows);
+    int scroll = (std::clamp)(tab.scrollOffset, 0, maxScroll);
+
+    for (int i = 0; i < maxRows && (scroll + i) < totalItems; ++i) {
+        int itemIdx = scroll + i;
+        const auto& kv = tab.keyValues[itemIdx];
+        int y = startY + i * rowH;
+        bool isSelected = (itemIdx == tab.selectedIndex);
 
         if (isSelected) {
             drawRectFilled(14, y - 2, m_width - 28, rowH, MfdColor(mainColor.r / 5, mainColor.g / 5, mainColor.b / 5, 140));
