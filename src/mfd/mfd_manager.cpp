@@ -264,16 +264,21 @@ void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) 
         }
     } else if (key == "Position X") {
         slot.pose.position.x += step * 0.02f;
+        slot.baselinePose.position.x = slot.pose.position.x;
     } else if (key == "Position Y") {
         slot.pose.position.y += step * 0.02f;
+        slot.baselinePose.position.y = slot.pose.position.y;
     } else if (key == "Position Z") {
         slot.pose.position.z += step * 0.02f;
+        slot.baselinePose.position.z = slot.pose.position.z;
     } else if (key == "Pitch") {
         slot.pitchDeg += step * 2.0f;
         slot.pose.orientation = Quat::fromEulerDegrees(slot.pitchDeg, slot.yawDeg, 0.0f);
+        slot.baselinePose.orientation = slot.pose.orientation;
     } else if (key == "Yaw") {
         slot.yawDeg += step * 2.0f;
         slot.pose.orientation = Quat::fromEulerDegrees(slot.pitchDeg, slot.yawDeg, 0.0f);
+        slot.baselinePose.orientation = slot.pose.orientation;
     } else if (key == "Glass Opacity") {
         slot.opacity = (std::clamp)(slot.opacity + step * 0.05f, 0.0f, 1.0f);
     } else if (key == "Display Scale") {
@@ -282,12 +287,44 @@ void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) 
         float baseH = (slot.name == "main_mfd") ? 0.18f : 0.16f;
         slot.pose.widthM = baseW * slot.scale;
         slot.pose.heightM = baseH * slot.scale;
+        slot.baselinePose.widthM = slot.pose.widthM;
+        slot.baselinePose.heightM = slot.pose.heightM;
     } else if (key == "Color Mode") {
         slot.useCustomColor = !slot.useCustomColor;
+        if (slot.useCustomColor) {
+            switch (slot.theme) {
+                case MfdColorTheme::kDefaultAmber:
+                    slot.customColor.r = 255; slot.customColor.g = 110; slot.customColor.b = 0; break;
+                case MfdColorTheme::kCyanIce:
+                    slot.customColor.r = 60; slot.customColor.g = 200; slot.customColor.b = 255; break;
+                case MfdColorTheme::kMatrixGreen:
+                    slot.customColor.r = 0; slot.customColor.g = 255; slot.customColor.b = 128; break;
+                case MfdColorTheme::kSolarWhite:
+                    slot.customColor.r = 220; slot.customColor.g = 230; slot.customColor.b = 240; break;
+                case MfdColorTheme::kCrimson:
+                    slot.customColor.r = 255; slot.customColor.g = 40; slot.customColor.b = 40; break;
+                case MfdColorTheme::kPurpleHaze:
+                    slot.customColor.r = 200; slot.customColor.g = 100; slot.customColor.b = 255; break;
+            }
+        }
     } else if (key == "Preset Theme") {
         int themeIdx = static_cast<int>(slot.theme);
         themeIdx = (themeIdx + (isLeft ? 5 : 1)) % 6;
         slot.theme = static_cast<MfdColorTheme>(themeIdx);
+        switch (slot.theme) {
+            case MfdColorTheme::kDefaultAmber:
+                slot.customColor.r = 255; slot.customColor.g = 110; slot.customColor.b = 0; break;
+            case MfdColorTheme::kCyanIce:
+                slot.customColor.r = 60; slot.customColor.g = 200; slot.customColor.b = 255; break;
+            case MfdColorTheme::kMatrixGreen:
+                slot.customColor.r = 0; slot.customColor.g = 255; slot.customColor.b = 128; break;
+            case MfdColorTheme::kSolarWhite:
+                slot.customColor.r = 220; slot.customColor.g = 230; slot.customColor.b = 240; break;
+            case MfdColorTheme::kCrimson:
+                slot.customColor.r = 255; slot.customColor.g = 40; slot.customColor.b = 40; break;
+            case MfdColorTheme::kPurpleHaze:
+                slot.customColor.r = 200; slot.customColor.g = 100; slot.customColor.b = 255; break;
+        }
     } else if (key == "Custom Red (R)") {
         int r = static_cast<int>(slot.customColor.r) + stepInt;
         slot.customColor.r = static_cast<uint8_t>(std::clamp(r, 0, 255));
@@ -315,6 +352,8 @@ void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) 
         float offY = slot.gazeTracker.anchorOffsetY() + step * 0.05f;
         slot.gazeTracker.setAnchorOffset(0.0f, (std::clamp)(offY, -0.5f, 0.5f));
     }
+
+    MfdManager::instance().saveSettings();
 }
 
 void ensureSettingsTab(MfdSlot& slot) {
@@ -701,6 +740,192 @@ void MfdManager::ensureDefaultSlots() {
             slot.isVisible = (requestedSlots >= 3);
         }
     }
+
+    loadSettings();
+}
+
+static std::wstring getMfdIniPath() {
+    std::wstring exeDir = edvr::executableDirectory();
+    std::wstring pluginsDir = exeDir + L"\\plugins";
+    CreateDirectoryW(pluginsDir.c_str(), nullptr);
+    return pluginsDir + L"\\edvr_mfd.ini";
+}
+
+static std::wstring getMfdLocalAppDataIniPath() {
+    wchar_t localAppData[MAX_PATH]{};
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, MAX_PATH)) {
+        std::wstring dir = std::wstring(localAppData) + L"\\EDVR";
+        CreateDirectoryW(dir.c_str(), nullptr);
+        return dir + L"\\edvr_mfd.ini";
+    }
+    return L"";
+}
+
+bool MfdManager::loadSettings() {
+    std::wstring path = getMfdIniPath();
+    DWORD attr = GetFileAttributesW(path.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES) {
+        path = getMfdLocalAppDataIniPath();
+        attr = GetFileAttributesW(path.c_str());
+        if (attr == INVALID_FILE_ATTRIBUTES) {
+            return false;
+        }
+    }
+
+    for (auto& slot : m_slots) {
+        std::wstring secW = L"slot." + std::wstring(slot.name.begin(), slot.name.end());
+        wchar_t buf[128];
+
+        if (GetPrivateProfileStringW(secW.c_str(), L"pos_x", L"", buf, 128, path.c_str()) > 0) {
+            slot.pose.position.x = static_cast<float>(_wtof(buf));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"pos_y", L"", buf, 128, path.c_str()) > 0) {
+            slot.pose.position.y = static_cast<float>(_wtof(buf));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"pos_z", L"", buf, 128, path.c_str()) > 0) {
+            slot.pose.position.z = static_cast<float>(_wtof(buf));
+        }
+        slot.baselinePose.position = slot.pose.position;
+
+        if (GetPrivateProfileStringW(secW.c_str(), L"pitch", L"", buf, 128, path.c_str()) > 0) {
+            slot.pitchDeg = static_cast<float>(_wtof(buf));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"yaw", L"", buf, 128, path.c_str()) > 0) {
+            slot.yawDeg = static_cast<float>(_wtof(buf));
+        }
+        slot.pose.orientation = Quat::fromEulerDegrees(slot.pitchDeg, slot.yawDeg, 0.0f);
+        slot.baselinePose.orientation = slot.pose.orientation;
+
+        if (GetPrivateProfileStringW(secW.c_str(), L"scale", L"", buf, 128, path.c_str()) > 0) {
+            slot.scale = (std::clamp)(static_cast<float>(_wtof(buf)), 0.50f, 2.0f);
+            float baseW = (slot.name == "main_mfd") ? 0.28f : 0.24f;
+            float baseH = (slot.name == "main_mfd") ? 0.18f : 0.16f;
+            slot.pose.widthM = baseW * slot.scale;
+            slot.pose.heightM = baseH * slot.scale;
+            slot.baselinePose.widthM = slot.pose.widthM;
+            slot.baselinePose.heightM = slot.pose.heightM;
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"opacity", L"", buf, 128, path.c_str()) > 0) {
+            slot.opacity = (std::clamp)(static_cast<float>(_wtof(buf)), 0.0f, 1.0f);
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"locked", L"", buf, 128, path.c_str()) > 0) {
+            slot.trackingLocked = (_wtoi(buf) != 0);
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"auto_hide", L"", buf, 128, path.c_str()) > 0) {
+            slot.autoHideUntilGaze = (_wtoi(buf) != 0);
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"use_custom_color", L"", buf, 128, path.c_str()) > 0) {
+            slot.useCustomColor = (_wtoi(buf) != 0);
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"theme", L"", buf, 128, path.c_str()) > 0) {
+            int t = _wtoi(buf);
+            if (t >= 0 && t <= 5) slot.theme = static_cast<MfdColorTheme>(t);
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"custom_r", L"", buf, 128, path.c_str()) > 0) {
+            slot.customColor.r = static_cast<uint8_t>(std::clamp(_wtoi(buf), 0, 255));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"custom_g", L"", buf, 128, path.c_str()) > 0) {
+            slot.customColor.g = static_cast<uint8_t>(std::clamp(_wtoi(buf), 0, 255));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"custom_b", L"", buf, 128, path.c_str()) > 0) {
+            slot.customColor.b = static_cast<uint8_t>(std::clamp(_wtoi(buf), 0, 255));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"custom_a", L"", buf, 128, path.c_str()) > 0) {
+            slot.customColor.a = static_cast<uint8_t>(std::clamp(_wtoi(buf), 10, 255));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"dwell_delay", L"", buf, 128, path.c_str()) > 0) {
+            slot.gazeTracker.setDwellTimeThreshold((std::clamp)(static_cast<float>(_wtof(buf)), 0.05f, 4.0f));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"release_delay", L"", buf, 128, path.c_str()) > 0) {
+            slot.gazeTracker.setDwellExitTime((std::clamp)(static_cast<float>(_wtof(buf)), 0.05f, 4.0f));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"cone_margin", L"", buf, 128, path.c_str()) > 0) {
+            slot.gazeTracker.setHitMargin((std::clamp)(static_cast<float>(_wtof(buf)), 0.80f, 2.50f));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"anchor_offset_y", L"", buf, 128, path.c_str()) > 0) {
+            slot.gazeTracker.setAnchorOffset(0.0f, (std::clamp)(static_cast<float>(_wtof(buf)), -0.5f, 0.5f));
+        }
+        if (GetPrivateProfileStringW(secW.c_str(), L"activity_mask", L"", buf, 128, path.c_str()) > 0) {
+            slot.activityMask = static_cast<uint32_t>(_wtoi(buf));
+        }
+    }
+    return true;
+}
+
+bool MfdManager::saveSettings() {
+    std::wstring path = getMfdIniPath();
+    std::wstring localPath = getMfdLocalAppDataIniPath();
+    std::vector<std::wstring> targets;
+    if (!path.empty()) targets.push_back(path);
+    if (!localPath.empty()) targets.push_back(localPath);
+
+    for (const auto& target : targets) {
+        for (const auto& slot : m_slots) {
+            std::wstring secW = L"slot." + std::wstring(slot.name.begin(), slot.name.end());
+            wchar_t buf[128];
+
+            swprintf_s(buf, L"%.4f", slot.pose.position.x);
+            WritePrivateProfileStringW(secW.c_str(), L"pos_x", buf, target.c_str());
+
+            swprintf_s(buf, L"%.4f", slot.pose.position.y);
+            WritePrivateProfileStringW(secW.c_str(), L"pos_y", buf, target.c_str());
+
+            swprintf_s(buf, L"%.4f", slot.pose.position.z);
+            WritePrivateProfileStringW(secW.c_str(), L"pos_z", buf, target.c_str());
+
+            swprintf_s(buf, L"%.2f", slot.pitchDeg);
+            WritePrivateProfileStringW(secW.c_str(), L"pitch", buf, target.c_str());
+
+            swprintf_s(buf, L"%.2f", slot.yawDeg);
+            WritePrivateProfileStringW(secW.c_str(), L"yaw", buf, target.c_str());
+
+            swprintf_s(buf, L"%.2f", slot.scale);
+            WritePrivateProfileStringW(secW.c_str(), L"scale", buf, target.c_str());
+
+            swprintf_s(buf, L"%.2f", slot.opacity);
+            WritePrivateProfileStringW(secW.c_str(), L"opacity", buf, target.c_str());
+
+            swprintf_s(buf, L"%d", slot.trackingLocked ? 1 : 0);
+            WritePrivateProfileStringW(secW.c_str(), L"locked", buf, target.c_str());
+
+            swprintf_s(buf, L"%d", slot.autoHideUntilGaze ? 1 : 0);
+            WritePrivateProfileStringW(secW.c_str(), L"auto_hide", buf, target.c_str());
+
+            swprintf_s(buf, L"%d", slot.useCustomColor ? 1 : 0);
+            WritePrivateProfileStringW(secW.c_str(), L"use_custom_color", buf, target.c_str());
+
+            swprintf_s(buf, L"%d", static_cast<int>(slot.theme));
+            WritePrivateProfileStringW(secW.c_str(), L"theme", buf, target.c_str());
+
+            swprintf_s(buf, L"%u", static_cast<unsigned int>(slot.customColor.r));
+            WritePrivateProfileStringW(secW.c_str(), L"custom_r", buf, target.c_str());
+
+            swprintf_s(buf, L"%u", static_cast<unsigned int>(slot.customColor.g));
+            WritePrivateProfileStringW(secW.c_str(), L"custom_g", buf, target.c_str());
+
+            swprintf_s(buf, L"%u", static_cast<unsigned int>(slot.customColor.b));
+            WritePrivateProfileStringW(secW.c_str(), L"custom_b", buf, target.c_str());
+
+            swprintf_s(buf, L"%u", static_cast<unsigned int>(slot.customColor.a));
+            WritePrivateProfileStringW(secW.c_str(), L"custom_a", buf, target.c_str());
+
+            swprintf_s(buf, L"%.2f", slot.gazeTracker.dwellTimeThreshold());
+            WritePrivateProfileStringW(secW.c_str(), L"dwell_delay", buf, target.c_str());
+
+            swprintf_s(buf, L"%.2f", slot.gazeTracker.dwellExitTime());
+            WritePrivateProfileStringW(secW.c_str(), L"release_delay", buf, target.c_str());
+
+            swprintf_s(buf, L"%.2f", slot.gazeTracker.hitMargin());
+            WritePrivateProfileStringW(secW.c_str(), L"cone_margin", buf, target.c_str());
+
+            swprintf_s(buf, L"%.2f", slot.gazeTracker.anchorOffsetY());
+            WritePrivateProfileStringW(secW.c_str(), L"anchor_offset_y", buf, target.c_str());
+
+            swprintf_s(buf, L"%u", slot.activityMask);
+            WritePrivateProfileStringW(secW.c_str(), L"activity_mask", buf, target.c_str());
+        }
+    }
+    return true;
 }
 
 bool MfdManager::isEnabled() const {

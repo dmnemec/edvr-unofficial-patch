@@ -57,6 +57,8 @@ public:
     void shutdown();
     bool isEnabled() const;
     void setEnabled(bool enabled) { m_enabled = enabled; }
+    bool loadSettings();
+    bool saveSettings();
 
     // Slot management
     bool addSlot(std::string name, std::unique_ptr<IMfdProvider> provider, const MfdPose& pose);
