@@ -153,10 +153,26 @@ void MfdRenderer::drawTextRight(int rightX, int y, const std::string& text, MfdC
     drawText(rightX - textW, y, text, color, scale);
 }
 
-void MfdRenderer::render(const MfdViewModel& model, float backgroundOpacity, MfdColorTheme theme) {
+void MfdRenderer::render(const MfdViewModel& model, float backgroundOpacity, MfdColorTheme theme, bool useCustomColor, MfdColor customColor) {
     auto paletteSet = palette::getTheme(theme);
+    if (useCustomColor) {
+        paletteSet.mainColor = customColor;
+        // Compute bright, dim, and border colors based on customColor and its alpha/brightness
+        float brightFactor = 1.3f;
+        float dimFactor = 0.55f;
+        uint8_t brR = static_cast<uint8_t>((std::min)(255.0f, customColor.r * brightFactor));
+        uint8_t brG = static_cast<uint8_t>((std::min)(255.0f, customColor.g * brightFactor));
+        uint8_t brB = static_cast<uint8_t>((std::min)(255.0f, customColor.b * brightFactor));
+        paletteSet.brightColor = MfdColor(brR, brG, brB, customColor.a);
 
-    // 1. Translucent dark cockpit glass background
+        uint8_t dimR = static_cast<uint8_t>(customColor.r * dimFactor);
+        uint8_t dimG = static_cast<uint8_t>(customColor.g * dimFactor);
+        uint8_t dimB = static_cast<uint8_t>(customColor.b * dimFactor);
+        paletteSet.dimColor = MfdColor(dimR, dimG, dimB, customColor.a);
+        paletteSet.borderColor = customColor;
+    }
+
+    // 1. Translucent dark cockpit glass background (0% backgroundOpacity = 100% transparent glass)
     uint8_t bgAlpha = static_cast<uint8_t>(std::clamp(backgroundOpacity, 0.0f, 1.0f) * 255.0f);
     MfdColor bgColor(paletteSet.bgColor.r, paletteSet.bgColor.g, paletteSet.bgColor.b, bgAlpha);
     clear(bgColor);

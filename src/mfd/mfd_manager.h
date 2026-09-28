@@ -34,6 +34,8 @@ struct MfdSlot {
     bool autoHideUntilGaze = false; // Invisible until gaze activated
     float opacity = 0.75f;
     MfdColorTheme theme = MfdColorTheme::kDefaultAmber;
+    bool useCustomColor = false;
+    MfdColor customColor{255, 110, 0, 255}; // Custom vector line color (RGBA)
     uint32_t activityMask = kActivityAlways; // Vehicle / state gating
     float currentAlpha = 1.0f; // Smooth fade transition for auto-hide
     float maxPerspectiveTilt = 25.0f; // Max angular deviation limit from baseline

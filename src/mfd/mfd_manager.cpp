@@ -231,6 +231,8 @@ bool isActivityActive(uint32_t mask, uint32_t flags) {
 void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) {
     bool isLeft = (delta < 0);
     float step = isLeft ? -1.0f : 1.0f;
+    int stepInt = isLeft ? -5 : 5;
+
     if (key == "Position X") {
         slot.pose.position.x += step * 0.02f;
     } else if (key == "Position Y") {
@@ -251,15 +253,32 @@ void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) 
         float baseH = (slot.name == "main_mfd") ? 0.18f : 0.16f;
         slot.pose.widthM = baseW * slot.scale;
         slot.pose.heightM = baseH * slot.scale;
-    } else if (key == "Color Theme") {
+    } else if (key == "Color Mode") {
+        slot.useCustomColor = !slot.useCustomColor;
+    } else if (key == "Preset Theme") {
         int themeIdx = static_cast<int>(slot.theme);
         themeIdx = (themeIdx + (isLeft ? 5 : 1)) % 6;
         slot.theme = static_cast<MfdColorTheme>(themeIdx);
+    } else if (key == "Custom Red (R)") {
+        int r = static_cast<int>(slot.customColor.r) + stepInt;
+        slot.customColor.r = static_cast<uint8_t>(std::clamp(r, 0, 255));
+    } else if (key == "Custom Green (G)") {
+        int g = static_cast<int>(slot.customColor.g) + stepInt;
+        slot.customColor.g = static_cast<uint8_t>(std::clamp(g, 0, 255));
+    } else if (key == "Custom Blue (B)") {
+        int b = static_cast<int>(slot.customColor.b) + stepInt;
+        slot.customColor.b = static_cast<uint8_t>(std::clamp(b, 0, 255));
+    } else if (key == "Custom Brightness (A)") {
+        int a = static_cast<int>(slot.customColor.a) + stepInt;
+        slot.customColor.a = static_cast<uint8_t>(std::clamp(a, 10, 255));
     } else if (key == "Auto-Hide Gaze") {
         slot.autoHideUntilGaze = !slot.autoHideUntilGaze;
     } else if (key == "Gaze Dwell Delay") {
         float dt = slot.gazeTracker.dwellTimeThreshold() + step * 0.10f;
         slot.gazeTracker.setDwellTimeThreshold((std::clamp)(dt, 0.05f, 4.0f));
+    } else if (key == "Gaze Release Delay") {
+        float dt = slot.gazeTracker.dwellExitTime() + step * 0.10f;
+        slot.gazeTracker.setDwellExitTime((std::clamp)(dt, 0.05f, 4.0f));
     } else if (key == "Focus Cone Margin") {
         float m = slot.gazeTracker.hitMargin() + step * 0.05f;
         slot.gazeTracker.setHitMargin((std::clamp)(m, 0.80f, 2.50f));
@@ -313,13 +332,33 @@ void ensureSettingsTab(MfdSlot& slot) {
     snprintf(buf, sizeof(buf), "%.2fx", slot.scale);
     settingsTab->keyValues.push_back({"Display Scale", buf, palette::kAmberNormal});
 
-    settingsTab->keyValues.push_back({"Color Theme", themeName(slot.theme), palette::kCyanAccent});
+    settingsTab->keyValues.push_back({"Color Mode", slot.useCustomColor ? "Custom RGBA" : "Preset Theme",
+                                      slot.useCustomColor ? palette::kSuccessGreen : palette::kCyanAccent});
+
+    if (slot.useCustomColor) {
+        snprintf(buf, sizeof(buf), "#%02X%02X%02X (%d)", slot.customColor.r, slot.customColor.g, slot.customColor.b, slot.customColor.r);
+        settingsTab->keyValues.push_back({"Custom Red (R)", buf, MfdColor(255, 60, 60)});
+
+        snprintf(buf, sizeof(buf), "#%02X%02X%02X (%d)", slot.customColor.r, slot.customColor.g, slot.customColor.b, slot.customColor.g);
+        settingsTab->keyValues.push_back({"Custom Green (G)", buf, MfdColor(60, 255, 60)});
+
+        snprintf(buf, sizeof(buf), "#%02X%02X%02X (%d)", slot.customColor.r, slot.customColor.g, slot.customColor.b, slot.customColor.b);
+        settingsTab->keyValues.push_back({"Custom Blue (B)", buf, MfdColor(60, 180, 255)});
+
+        snprintf(buf, sizeof(buf), "%.0f%% (%d)", (slot.customColor.a / 255.0f) * 100.0f, slot.customColor.a);
+        settingsTab->keyValues.push_back({"Custom Brightness (A)", buf, palette::kCyanAccent});
+    } else {
+        settingsTab->keyValues.push_back({"Preset Theme", themeName(slot.theme), palette::kCyanAccent});
+    }
 
     settingsTab->keyValues.push_back({"Auto-Hide Gaze", slot.autoHideUntilGaze ? "Enabled (Fade)" : "Disabled (Always On)",
                                       slot.autoHideUntilGaze ? palette::kSuccessGreen : palette::kAmberDim});
 
     snprintf(buf, sizeof(buf), "%.2f s", slot.gazeTracker.dwellTimeThreshold());
     settingsTab->keyValues.push_back({"Gaze Dwell Delay", buf, palette::kAmberNormal});
+
+    snprintf(buf, sizeof(buf), "%.2f s", slot.gazeTracker.dwellExitTime());
+    settingsTab->keyValues.push_back({"Gaze Release Delay", buf, palette::kAmberNormal});
 
     snprintf(buf, sizeof(buf), "%.2fx", slot.gazeTracker.hitMargin());
     settingsTab->keyValues.push_back({"Focus Cone Margin", buf, palette::kAmberNormal});
@@ -719,13 +758,13 @@ void MfdManager::update(const Vec3& headPos, const Vec3& headForward, float dtSe
         MfdFocusState prevState = slot.gazeTracker.currentState();
         MfdFocusState newState = slot.gazeTracker.update(headPos, headForward, slot.pose, dtSeconds);
 
-        // Update smooth alpha for auto-hide
+        // Update smooth alpha for auto-hide fade transition
         if (slot.autoHideUntilGaze) {
             float targetAlpha = (slot.gazeTracker.isFocused() || slot.gazeTracker.dwellProgress() > 0.05f)
-                                ? slot.gazeTracker.dwellProgress() * slot.opacity : 0.0f;
-            slot.currentAlpha += (targetAlpha - slot.currentAlpha) * std::clamp(dtSeconds * 12.0f, 0.0f, 1.0f);
+                                ? 1.0f : 0.0f;
+            slot.currentAlpha += (targetAlpha - slot.currentAlpha) * std::clamp(dtSeconds * 10.0f, 0.0f, 1.0f);
         } else {
-            slot.currentAlpha = slot.opacity;
+            slot.currentAlpha = 1.0f;
         }
 
         // Notify provider if focus state crossed threshold
@@ -747,8 +786,8 @@ void MfdManager::render() {
         if (!isActivityActive(slot.activityMask, status.flags)) continue;
         if (slot.currentAlpha < 0.01f) continue;
 
-        // Rasterize view model into pixel buffer with slot theme and alpha
-        slot.renderer->render(slot.provider->viewModel(), slot.currentAlpha, slot.theme);
+        // Rasterize view model into pixel buffer with slot background opacity and theme/customColor
+        slot.renderer->render(slot.provider->viewModel(), slot.opacity, slot.theme, slot.useCustomColor, slot.customColor);
 
         // Submit rendered frame to active compositor
         if (m_compositor && m_compositor->isReady()) {
@@ -847,17 +886,57 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
             continue;
         }
 
-        float normX = (tanX - tanLeft) / tanW;
-        float normY = (tanUp - tanY) / tanH;
+        // Rotate 4 corners of the quad in 3D by slot.pose.orientation
+        Vec3 halfRight = slot.pose.orientation.rotate(Vec3(slot.pose.widthM * 0.5f, 0.0f, 0.0f));
+        Vec3 halfUp    = slot.pose.orientation.rotate(Vec3(0.0f, slot.pose.heightM * 0.5f, 0.0f));
 
-        float cx = normX * static_cast<float>(viewportWidth);
-        float cy = normY * static_cast<float>(viewportHeight);
+        Vec3 corners[4] = {
+            slot.pose.position - halfRight + halfUp, // Top-Left
+            slot.pose.position + halfRight + halfUp, // Top-Right
+            slot.pose.position - halfRight - halfUp, // Bottom-Left
+            slot.pose.position + halfRight - halfUp  // Bottom-Right
+        };
 
-        float pixW = (slot.pose.widthM / zDist) / tanW * static_cast<float>(viewportWidth);
-        float pixH = (slot.pose.heightM / zDist) / tanH * static_cast<float>(viewportHeight);
+        Quat invEyeRot(-eyeRot.x, -eyeRot.y, -eyeRot.z, eyeRot.w);
+        float minNormX = 1e9f, maxNormX = -1e9f;
+        float minNormY = 1e9f, maxNormY = -1e9f;
+        bool anyBehind = false;
 
-        m_debugStats.screenX = cx;
-        m_debugStats.screenY = cy;
+        for (int c = 0; c < 4; ++c) {
+            Vec3 cornerLocal;
+            if (headLocked) {
+                cornerLocal = corners[c];
+            } else {
+                Vec3 relPos = corners[c] - eyePos;
+                cornerLocal = invEyeRot.rotate(relPos);
+            }
+            if (cornerLocal.z >= -0.05f) {
+                anyBehind = true;
+                break;
+            }
+            float czDist = -cornerLocal.z;
+            float cTanX = cornerLocal.x / czDist;
+            float cTanY = cornerLocal.y / czDist;
+            float cNormX = (cTanX - tanLeft) / tanW;
+            float cNormY = (tanUp - cTanY) / tanH;
+            minNormX = (std::min)(minNormX, cNormX);
+            maxNormX = (std::max)(maxNormX, cNormX);
+            minNormY = (std::min)(minNormY, cNormY);
+            maxNormY = (std::max)(maxNormY, cNormY);
+        }
+
+        if (anyBehind) {
+            m_debugStats.inFrustum = false;
+            continue;
+        }
+
+        float vx = minNormX * static_cast<float>(viewportWidth);
+        float vy = minNormY * static_cast<float>(viewportHeight);
+        float pixW = (maxNormX - minNormX) * static_cast<float>(viewportWidth);
+        float pixH = (maxNormY - minNormY) * static_cast<float>(viewportHeight);
+
+        m_debugStats.screenX = vx + pixW * 0.5f;
+        m_debugStats.screenY = vy + pixH * 0.5f;
         m_debugStats.screenW = pixW;
         m_debugStats.screenH = pixH;
 
@@ -869,9 +948,6 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
             }
             continue;
         }
-
-        float vx = cx - pixW * 0.5f;
-        float vy = cy - pixH * 0.5f;
 
         // Clip to viewport bounds
         float clipLeft = std::max(0.0f, vx);

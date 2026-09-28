@@ -237,7 +237,7 @@ enum class DeviceKind {
 
 template <bool Wide>
 DeviceKind classifyDevice(DiDoor& d, void* self) {
-    if (self == d.dummy) return DeviceKind::kKeyboard;
+    if (self == d.dummy && !d.gameDevice) return DeviceKind::kKeyboard;
     void** vt = *reinterpret_cast<void***>(self);
     if (!vt || !vt[3]) return DeviceKind::kUnknown;
     DIDEVCAPS caps{};
