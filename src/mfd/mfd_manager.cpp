@@ -2,6 +2,12 @@
 #include "../common/config.h"
 #include "../common/log.h"
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <windows.h>
+#include <shlobj.h>
+#pragma comment(lib, "user32.lib")
 
 #if __has_include(<openxr/openxr.h>)
 #include <openxr/openxr.h>
@@ -47,6 +53,163 @@ MfdSharedState* getMfdSharedState() {
 
     s_shared = static_cast<MfdSharedState*>(MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(MfdSharedState)));
     return s_shared;
+}
+
+void copyToClipboard(const std::string& text) {
+    if (text.empty()) return;
+    if (!OpenClipboard(nullptr)) return;
+    EmptyClipboard();
+    HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
+    if (hGlob) {
+        char* p = static_cast<char*>(GlobalLock(hGlob));
+        if (p) {
+            memcpy(p, text.c_str(), text.size() + 1);
+            GlobalUnlock(hGlob);
+            SetClipboardData(CF_TEXT, hGlob);
+        }
+    }
+    CloseClipboard();
+}
+
+std::wstring getSavedGamesEliteDir() {
+    wchar_t userProfile[MAX_PATH];
+    if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH) > 0) {
+        std::wstring p = userProfile;
+        p += L"\\Saved Games\\Frontier Developments\\Elite Dangerous";
+        return p;
+    }
+    return L"";
+}
+
+struct EliteStatusData {
+    int pipsSysHalf = 8;
+    int pipsEngHalf = 0;
+    int pipsWepHalf = 4;
+    float fuelMain = -1.0f;
+    float fuelReservoir = -1.0f;
+    int cargoCount = 0;
+    int fireGroup = 0;
+    uint32_t flags = 0;
+    bool hasPips = false;
+    bool hasFuel = false;
+};
+
+EliteStatusData readEliteStatus() {
+    EliteStatusData data;
+    std::wstring statusPath = getSavedGamesEliteDir() + L"\\Status.json";
+    std::ifstream f(statusPath);
+    if (!f.is_open()) return data;
+
+    std::stringstream buffer;
+    buffer << f.rdbuf();
+    std::string s = buffer.str();
+
+    // Parse Pips: [x, y, z]
+    size_t pipsPos = s.find("\"Pips\":");
+    if (pipsPos != std::string::npos) {
+        size_t openBracket = s.find('[', pipsPos);
+        size_t closeBracket = s.find(']', openBracket);
+        if (openBracket != std::string::npos && closeBracket != std::string::npos) {
+            std::string pipsStr = s.substr(openBracket + 1, closeBracket - openBracket - 1);
+            int p0 = 0, p1 = 0, p2 = 0;
+            if (sscanf_s(pipsStr.c_str(), "%d,%d,%d", &p0, &p1, &p2) == 3) {
+                data.pipsSysHalf = p0;
+                data.pipsEngHalf = p1;
+                data.pipsWepHalf = p2;
+                data.hasPips = true;
+            }
+        }
+    }
+
+    // Parse Fuel: {"FuelMain": x.xx, "FuelReservoir": y.yy}
+    size_t fuelPos = s.find("\"Fuel\":");
+    if (fuelPos != std::string::npos) {
+        size_t fm = s.find("\"FuelMain\":", fuelPos);
+        if (fm != std::string::npos) {
+            float fval = 0.0f;
+            if (sscanf_s(s.c_str() + fm + 11, "%f", &fval) == 1) {
+                data.fuelMain = fval;
+                data.hasFuel = true;
+            }
+        }
+    }
+
+    // Parse Cargo: x
+    size_t cargoPos = s.find("\"Cargo\":");
+    if (cargoPos != std::string::npos) {
+        int cval = 0;
+        if (sscanf_s(s.c_str() + cargoPos + 8, "%d", &cval) == 1) {
+            data.cargoCount = cval;
+        }
+    }
+
+    // Parse FireGroup: x
+    size_t fgPos = s.find("\"FireGroup\":");
+    if (fgPos != std::string::npos) {
+        int fgVal = 0;
+        if (sscanf_s(s.c_str() + fgPos + 12, "%d", &fgVal) == 1) {
+            data.fireGroup = fgVal;
+        }
+    }
+
+    // Parse Flags: x
+    size_t flagsPos = s.find("\"Flags\":");
+    if (flagsPos != std::string::npos) {
+        uint32_t fl = 0;
+        if (sscanf_s(s.c_str() + flagsPos + 8, "%u", &fl) == 1) {
+            data.flags = fl;
+        }
+    }
+
+    return data;
+}
+
+void ensureSettingsTab(MfdViewModel& model, const std::string& slotName) {
+    for (auto& tab : model.tabs) {
+        if (tab.title == "SETTINGS") {
+            // Update settings key values dynamically
+            tab.keyValues.clear();
+            float posX = 0.0f, posY = 0.0f, posZ = 0.0f, pitch = 0.0f, yaw = 0.0f;
+            if (slotName == "main_mfd") {
+                posX = edvr::Config::get().getFloat("fix.mfd_pos_x", 0.0f);
+                posY = edvr::Config::get().getFloat("fix.mfd_pos_y", -0.16f);
+                posZ = edvr::Config::get().getFloat("fix.mfd_pos_z", -0.55f);
+                pitch = edvr::Config::get().getFloat("fix.mfd_pitch", -20.0f);
+                yaw = edvr::Config::get().getFloat("fix.mfd_yaw", 0.0f);
+            } else if (slotName == "left_mfd") {
+                posX = -0.45f; posY = -0.22f; posZ = -0.48f;
+                pitch = -22.0f; yaw = 32.0f;
+            } else if (slotName == "right_mfd") {
+                posX = 0.45f; posY = -0.22f; posZ = -0.48f;
+                pitch = -22.0f; yaw = -32.0f;
+            }
+
+            float scale = edvr::Config::get().getFloat("fix.mfd_scale", 1.0f);
+            float opacity = edvr::Config::get().getFloat("fix.mfd_opacity", 0.75f);
+
+            char buf[64];
+            snprintf(buf, sizeof(buf), "(%.2f, %.2f, %.2f) m", posX, posY, posZ);
+            tab.keyValues.push_back({"Position XYZ", buf, palette::kAmberBright});
+
+            snprintf(buf, sizeof(buf), "Pitch %.0f*, Yaw %.0f*", pitch, yaw);
+            tab.keyValues.push_back({"Perspective Tilt", buf, palette::kAmberBright});
+
+            snprintf(buf, sizeof(buf), "%.0f%%", opacity * 100.0f);
+            tab.keyValues.push_back({"Glass Opacity", buf, palette::kCyanAccent});
+
+            snprintf(buf, sizeof(buf), "%.2fx", scale);
+            tab.keyValues.push_back({"Display Scale", buf, palette::kAmberNormal});
+
+            tab.keyValues.push_back({"Head-Look Align", "Enabled (Perspective)", palette::kSuccessGreen});
+            return;
+        }
+    }
+
+    // Add SETTINGS tab if not present
+    MfdTab settingsTab;
+    settingsTab.title = "SETTINGS";
+    settingsTab.type = MfdTabType::kKeyValue;
+    model.tabs.push_back(std::move(settingsTab));
 }
 } // namespace
 
@@ -151,6 +314,21 @@ void MfdManager::ensureDefaultSlots() {
         "}";
         auto providerCenter = std::make_unique<DeclarativeMfdProvider>("main_mfd", "SPANSH ROUTER");
         providerCenter->loadFromJson(jsonCenter);
+        providerCenter->setActionCallback([prov = providerCenter.get()](const std::string& itemId, const std::string& itemLabel) {
+            if (!itemLabel.empty()) {
+                copyToClipboard(itemLabel);
+                auto* tab = prov->viewModel().currentTab();
+                if (tab && tab->type == MfdTabType::kList) {
+                    for (auto& it : tab->items) {
+                        if (it.id == itemId) {
+                            it.badge = "COPIED";
+                            it.badgeColor = palette::kSuccessGreen;
+                            break;
+                        }
+                    }
+                }
+            }
+        });
         addSlot("main_mfd", std::move(providerCenter), poseCenter);
     }
 
@@ -177,8 +355,8 @@ void MfdManager::ensureDefaultSlots() {
                         "{\"key\": \"SYS Distributor\", \"value\": \"4.0 PIP\"},"
                         "{\"key\": \"ENG Distributor\", \"value\": \"0.0 PIP\"},"
                         "{\"key\": \"WEP Distributor\", \"value\": \"2.0 PIP\"},"
-                        "{\"key\": \"Heat Level\", \"value\": \"32% (Nominal)\"},"
-                        "{\"key\": \"Hull Integrity\", \"value\": \"100%\"}"
+                        "{\"key\": \"Fuel Main\", \"value\": \"32.0 T\"},"
+                        "{\"key\": \"Cargo Count\", \"value\": \"0 T\"}"
                     "]"
                 "},"
                 "{"
@@ -193,6 +371,43 @@ void MfdManager::ensureDefaultSlots() {
             "]"
         "}";
         providerLeft->loadFromJson(jsonLeft);
+        providerLeft->setUpdateHook([](MfdViewModel& model, float /*dtSeconds*/) {
+            static uint64_t lastPollMs = 0;
+            uint64_t now = GetTickCount64();
+            if (now - lastPollMs < 250) return;
+            lastPollMs = now;
+
+            EliteStatusData status = readEliteStatus();
+            for (auto& tab : model.tabs) {
+                if (tab.title == "POWER") {
+                    char buf[64];
+                    float sys = status.pipsSysHalf * 0.5f;
+                    float eng = status.pipsEngHalf * 0.5f;
+                    float wep = status.pipsWepHalf * 0.5f;
+                    for (auto& kv : tab.keyValues) {
+                        if (kv.key == "SYS Distributor") {
+                            snprintf(buf, sizeof(buf), "%.1f PIP", sys);
+                            kv.value = buf;
+                            kv.valueColor = sys >= 4.0f ? palette::kSuccessGreen : palette::kAmberNormal;
+                        } else if (kv.key == "ENG Distributor") {
+                            snprintf(buf, sizeof(buf), "%.1f PIP", eng);
+                            kv.value = buf;
+                            kv.valueColor = eng >= 4.0f ? palette::kSuccessGreen : palette::kAmberNormal;
+                        } else if (kv.key == "WEP Distributor") {
+                            snprintf(buf, sizeof(buf), "%.1f PIP", wep);
+                            kv.value = buf;
+                            kv.valueColor = wep >= 4.0f ? palette::kSuccessGreen : palette::kAmberNormal;
+                        } else if (kv.key == "Fuel Main") {
+                            snprintf(buf, sizeof(buf), "%.1f T", status.fuelMain >= 0.0f ? status.fuelMain : 32.0f);
+                            kv.value = buf;
+                        } else if (kv.key == "Cargo Count") {
+                            snprintf(buf, sizeof(buf), "%d T", status.cargoCount);
+                            kv.value = buf;
+                        }
+                    }
+                }
+            }
+        });
         addSlot("left_mfd", std::move(providerLeft), poseLeft);
     }
 
@@ -263,10 +478,9 @@ bool MfdManager::initialize(int renderWidth, int renderHeight) {
     Log::get().note("mfd: initialized renderSize=(%dx%d), enabled=%d, default_slots=%zu\n",
                     m_renderWidth, m_renderHeight, isEnabled() ? 1 : 0, m_slots.size());
 
-    if (m_compositor) {
-        if (auto* quad = dynamic_cast<OpenXrQuadCompositor*>(m_compositor.get())) {
-            quad->initialize(renderWidth, renderHeight);
-        }
+    if (m_compositor && m_compositor->backend() == MfdCompositorBackend::kOpenXrQuadLayer) {
+        auto* quad = static_cast<OpenXrQuadCompositor*>(m_compositor.get());
+        quad->initialize(renderWidth, renderHeight);
     }
     return true;
 }
@@ -347,11 +561,14 @@ void MfdManager::update(const Vec3& headPos, const Vec3& headForward, float dtSe
         // Step 1: Update provider internal data / timers
         slot.provider->update(dtSeconds);
 
-        // Step 2: Track head gaze and evaluate focus state
+        // Step 2: Ensure persistent SETTINGS tab is up-to-date with live transforms
+        ensureSettingsTab(slot.provider->viewModel(), slot.name);
+
+        // Step 3: Track head gaze and evaluate focus state
         MfdFocusState prevState = slot.gazeTracker.currentState();
         MfdFocusState newState = slot.gazeTracker.update(headPos, headForward, slot.pose, dtSeconds);
 
-        // Step 3: Notify provider if focus state crossed threshold
+        // Step 4: Notify provider if focus state crossed threshold
         bool wasFocused = (prevState == MfdFocusState::kFocused);
         bool isFocused = (newState == MfdFocusState::kFocused);
         if (wasFocused != isFocused) {

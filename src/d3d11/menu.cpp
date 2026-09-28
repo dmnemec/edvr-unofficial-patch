@@ -3969,7 +3969,10 @@ void menuTick(ID3D11Device* dev) {
         // it. Nothing between here and the old spot read the gate.
         const bool showingMenu = s.alpha > 0.0f && !s.toastUp;
         const bool drawnFresh = now - s.lastDrawnMs <= kDrawnFreshMs;
-        inputGateSetPrivate(s.open && showingMenu && drawnFresh && !s.pages[s.page].status);
+        int mfdFocus = 0;
+        edvr::mfd::MfdManager::readSharedTelemetry(nullptr, &mfdFocus, nullptr, nullptr, nullptr, nullptr);
+        const bool mfdFocused = (mfdFocus == 2);
+        inputGateSetPrivate((s.open && showingMenu && drawnFresh && !s.pages[s.page].status) || mfdFocused);
         // The fault line follows the gate the way the legend follows the
         // live predicate: a raster that said one thing while the gate now
         // says another is re-sent, so the warning appears when the draw

@@ -65,8 +65,14 @@ public:
         return m_model.title.c_str();
     }
 
+    using UpdateHook = std::function<void(MfdViewModel& model, float dtSeconds)>;
+
     void setActionCallback(ActionCallback callback) {
         m_actionCallback = std::move(callback);
+    }
+
+    void setUpdateHook(UpdateHook hook) {
+        m_updateHook = std::move(hook);
     }
 
     void onFocusChanged(bool focused) override {
@@ -74,8 +80,9 @@ public:
     }
 
     void update(float dtSeconds) override {
-        // Option A polling update hook (e.g. file timestamp checks, socket read)
-        (void)dtSeconds;
+        if (m_updateHook) {
+            m_updateHook(m_model, dtSeconds);
+        }
     }
 
     bool onInput(MfdInputAction action) override {
@@ -129,6 +136,7 @@ private:
     std::string m_id;
     MfdViewModel m_model;
     ActionCallback m_actionCallback;
+    UpdateHook m_updateHook;
 };
 
 // ============================================================================

@@ -46,7 +46,9 @@ bool MfdGazeTracker::testRayIntersection(const Vec3& headPos, const Vec3& headDi
     float halfW = mfdPose.widthM * 0.5f;
     float halfH = mfdPose.heightM * 0.5f;
 
-    return (std::abs(projX) <= halfW && std::abs(projY) <= halfH);
+    // 50% margin around display bounds for natural head-look acquisition
+    constexpr float kHitMargin = 1.5f;
+    return (std::abs(projX) <= halfW * kHitMargin && std::abs(projY) <= halfH * kHitMargin);
 }
 
 MfdFocusState MfdGazeTracker::update(const Vec3& headPos, const Vec3& headForward,
@@ -55,7 +57,14 @@ MfdFocusState MfdGazeTracker::update(const Vec3& headPos, const Vec3& headForwar
 
     // Gaze is considered on-target if ray intersects surface OR angle is within acquisition cone
     bool rayHits = testRayIntersection(headPos, headForward, mfdPose);
-    bool inCone = (m_lastGazeAngleDeg <= m_coneAngleDegrees);
+
+    // Dynamic angular radius adapts to any distance, position, scale, or tilt
+    float dist = (mfdPose.position - headPos).length();
+    float mfdRadius = std::sqrt(mfdPose.widthM * mfdPose.widthM + mfdPose.heightM * mfdPose.heightM) * 0.5f;
+    float angularRadiusDeg = (dist > 1e-3f) ? (std::atan2(mfdRadius * 1.5f, dist) * kRadToDeg) : m_coneAngleDegrees;
+    float effectiveCone = (std::max)(m_coneAngleDegrees, angularRadiusDeg);
+
+    bool inCone = (m_lastGazeAngleDeg <= effectiveCone);
     bool onTarget = rayHits || inCone;
 
     switch (m_state) {
