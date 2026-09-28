@@ -104,6 +104,7 @@ inline int flatProjectionRecipeTests() {
         {0x820E5C131B99361Dull,0x6EAA86EFE135B2D4ull,0,FlatProjectionPatchLayout::ForwardDp4,4},
         {0xB75A6FF2CA9FA5D6ull,0xD56F859BE4781431ull,0,FlatProjectionPatchLayout::ForwardDp4,4},
         {0x24214E7C45496BE0ull,0x0C8FCDB6A3BECCE6ull,2,FlatProjectionPatchLayout::ForwardColumns,8},
+        {0x24214E7C45496BE0ull,0xEC998602427115F3ull,2,FlatProjectionPatchLayout::ForwardColumns,8},
         {0xA1B7CFCD0BE7493Eull,0x2DB678B6B558B604ull,2,FlatProjectionPatchLayout::ForwardDp4,10},
         {0xCE24A73943632F55ull,0x1F64463B15189104ull,2,FlatProjectionPatchLayout::ForwardDp4,10},
         // Complete menu VS/PS blobs from the Epic 5c78c34d flight.
@@ -116,8 +117,21 @@ inline int flatProjectionRecipeTests() {
         {0x989E043933A369ABull,0xCE844D87026C684Cull,0,FlatProjectionPatchLayout::ForwardDp4,4},
         // Projected effect from the subsequent Epic 85d590e0 run.
         {0x2D8263CC54D55398ull,0x89B662E266E5D73Eull,0,FlatProjectionPatchLayout::ForwardDp4,4},
+        // Epic 20260927_203919, Caspian Explorer and fleet-carrier scene:
+        // colour-only companions verified by bytecode review (clip rows never
+        // read; coordinates from varyings/scalar grids; no depth output).
+        {0x9BFC7FD232328391ull,0xCB7AF179DF4E6A60ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0x2BB766C168B450A2ull,0x4888F2B05460FA9Bull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0xA47A3315FFF5E2E4ull,0xC67370DE72E4422Cull,0,FlatProjectionPatchLayout::ForwardDp4,4},
+        {0xB43A856E285815E3ull,0x9A664735737E2667ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0x99B41C87E45319E6ull,0xA9975F91040B0BCDull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0xACE405F428C17EF6ull,0ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0x72BDD292154158ADull,0x76849D64AC657DB9ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0xDF3503CD07F9B10Cull,0x02CC981DF36257C3ull,2,FlatProjectionPatchLayout::ForwardColumns,6},
+        {0x66DE2CADB1F4AE6Bull,0x235567BE2840B3EDull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0x66DE2CADB1F4AE6Bull,0x818212B5F404C002ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
     };
-    expect(sizeof(latest)/sizeof(latest[0])==35,"latest supported ordinary pair census size");
+    expect(sizeof(latest)/sizeof(latest[0])==46,"latest supported ordinary pair census size");
     FlatProjectionJitter jitter{};
     expect(flatProjectionJitter(.375f,-.25f,1280,720,jitter),"recipe pixel offset constructed");
     for (const auto& pair : latest) {
@@ -430,6 +444,47 @@ inline int flatProjectionRecipeTests() {
         for (size_t j=0;j<i;++j)
             expect(pair.vs!=epicMaxed[j].vs || pair.ps!=epicMaxed[j].ps,
                 "maxed-settings census has no duplicate exact pairs");
+    }
+    // Epic 20260926_134640 in-flight under the EDHM chain: mod-patched and
+    // settings-tier variants of mapped VS families, plus the mod-patched
+    // 7F89 glare VS, classified from captured bytecode in build/flat-audit-menu.
+    const ObservedPair epicFlight[] = {
+        {0x33A5025C48FC8259ull,0x7AA0441EE0E88667ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0x617C6E44A034E0C2ull,0x057F8E2778A5AAEDull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0xA6A39338C06E03A1ull,0x1AE6AB9A94C0456Eull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0xA8E4D93B8B294505ull,0x988711D4745DC5C7ull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0x5559BD94B6852E83ull,0xA8570CC2875ECC7Cull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0x5559BD94B6852E83ull,0xA8A8C196617726EAull,1,FlatProjectionPatchLayout::ForwardColumns,270},
+        {0x7F894EB5B6BA82A1ull,0x095030F27D2C362Aull,0,FlatProjectionPatchLayout::ForwardDp4,4},
+        {0x81216C77F90DEDD6ull,0x16F88966C091FC55ull,0,FlatProjectionPatchLayout::ForwardDp4,4},
+        {0xB7790CBFC6554097ull,0xB1CA8D8EEF7C886Dull,0,FlatProjectionPatchLayout::ForwardDp4,4},
+        {0xE508648660A352B2ull,0x62FB9466E5F672F3ull,0,FlatProjectionPatchLayout::ForwardDp4,4},
+        {0x5453D19B6D362364ull,0x289C3EA6EA3EFAF9ull,2,FlatProjectionPatchLayout::ForwardColumns,6},
+        {0xB932058F26B76691ull,0x0FAE3495E01DE787ull,2,FlatProjectionPatchLayout::ForwardColumns,6},
+        {0xDF3503CD07F9B10Cull,0x76BF170A625F18E3ull,2,FlatProjectionPatchLayout::ForwardColumns,6},
+        {0x9611A454527F7FEBull,0x5270C41523EAF95Aull,2,FlatProjectionPatchLayout::ForwardColumns,7},
+        {0xA2C2D5510BF1926Dull,0x4F39912FEED610E2ull,2,FlatProjectionPatchLayout::ForwardColumns,7},
+        {0x9B34C331902DC1EDull,0x9FDA9FAB05B654BDull,2,FlatProjectionPatchLayout::ForwardColumns,8},
+    };
+    expect(sizeof(epicFlight)/sizeof(epicFlight[0])==16,
+        "flight census complete");
+    for (size_t i=0;i<sizeof(epicFlight)/sizeof(epicFlight[0]);++i) {
+        const auto& pair=epicFlight[i];
+        const auto recipe=flatProjectionDrawRecipes(pair.vs,pair.ps);
+        expect(recipe.count==1 && recipe.requests[0].stage==FlatProjectionStage::Vertex &&
+            recipe.requests[0].slot==pair.slot && recipe.requests[0].patchCount==1 &&
+            recipe.requests[0].patches[0].layout==pair.layout &&
+            recipe.requests[0].patches[0].byteOffset==pair.row*16,
+            "flight exact pair patches only the measured vertex matrix span");
+        expect(flatProjectionDrawRecipes(pair.vs,pair.ps^1ull).count==0 &&
+            flatProjectionDrawRecipes(pair.vs^1ull,pair.ps).count==0 &&
+            flatProjectionDrawRecipes(pair.vs,0).count==0,
+            "flight projection requires both captured shader identities");
+        expect(!flatProjectionDrawUnchanged(pair.vs,pair.ps),
+            "flight projected geometry cannot bypass jitter");
+        for (size_t j=0;j<i;++j)
+            expect(pair.vs!=epicFlight[j].vs || pair.ps!=epicFlight[j].ps,
+                "flight census has no duplicate exact pairs");
     }
     const auto screenRay=flatProjectionDrawRecipes(0x4AEC439CEC7FFDCEull,0x87EF79B19297B8C4ull);
     expect(screenRay.count==1 && screenRay.requests[0].stage==FlatProjectionStage::Vertex &&

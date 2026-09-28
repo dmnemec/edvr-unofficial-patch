@@ -22,6 +22,7 @@ bool backendFail=false,backendReset=false,infiniteSeen=false;
 std::vector<std::string> resetEvents;
 float expectedJx=0,expectedJy=0;
 float observedMotion=0,observedMotionY=0,observedDepth=0;unsigned observedReject=0;
+uint32_t observedInW=0,observedInH=0,observedOutW=0,observedOutH=0;
 void check(bool ok,const char* text){if(!ok){std::printf("FAIL: %s\n",text);++failures;}}
 bool readPixel(ID3D11DeviceContext* context,ID3D11Texture2D* texture,void* out,size_t bytes,UINT x=8,UINT y=8) {
     ComPtr<ID3D11Device> device;context->GetDevice(device.GetAddressOf());
@@ -86,12 +87,14 @@ thread_local bool g_flatComputeInternal = false;
 bool dlaaAvailable(ID3D11Device*,const char**){return true;}
 bool fsr3Available(ID3D11Device*,const char**){return true;}
 bool dlaaEvaluate(ID3D11DeviceContext* c,int,ID3D11Texture2D*,ID3D11Texture2D* depth,ID3D11Texture2D* mv,
-    ID3D11Texture2D* out,ID3D11Texture2D* mask,uint32_t,uint32_t,uint32_t,uint32_t,float jx,float jy,bool reset,float,const char** why) {
+    ID3D11Texture2D* out,ID3D11Texture2D* mask,uint32_t w,uint32_t h,uint32_t outW,uint32_t outH,float jx,float jy,bool reset,float,const char** why) {
+    observedInW=w;observedInH=h;observedOutW=outW;observedOutH=outH;
     return backend(c,depth,mv,mask,out,jx,jy,reset,why);
 }
 bool fsr3Evaluate(ID3D11DeviceContext* c,unsigned,ID3D11Texture2D*,ID3D11Texture2D* depth,ID3D11Texture2D* mv,
-    ID3D11Texture2D* mask,ID3D11Texture2D* out,uint32_t,uint32_t,uint32_t,uint32_t,float jx,float jy,bool reset,float,
+    ID3D11Texture2D* mask,ID3D11Texture2D* out,uint32_t w,uint32_t h,uint32_t outW,uint32_t outH,float jx,float jy,bool reset,float,
     float nearZ,float,float fov,const char** why,bool infinite) {
+    observedInW=w;observedInH=h;observedOutW=outW;observedOutH=outH;
     infiniteSeen=infinite;check(nearZ==.025f && std::abs(fov-1.5707963f)<1e-5f,"FSR actual near and FOV");
     return backend(c,depth,mv,mask,out,jx,jy,reset,why);
 }
@@ -122,7 +125,11 @@ int main(int argc,char** argv) {
     bd.Usage=D3D11_USAGE_DEFAULT;bd.BindFlags=D3D11_BIND_SHADER_RESOURCE;bd.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
     D3D11_SUBRESOURCE_DATA initial{};initial.pSysMem=record;ComPtr<ID3D11Buffer> pool;
     check(SUCCEEDED(device->CreateBuffer(&bd,&initial,pool.GetAddressOf())),"pool buffer");auto poolView=view(device.Get(),pool.Get());
-    float scene[276][4]{};float cam[6][4];camera(cam);std::memcpy(scene+270,cam,sizeof(cam));
+    // The freshness stamp the prep shader's EN[276].x reads (the emit's
+    // present-frame clock in production): the fixture's markers fold it in.
+    constexpr uint32_t kFixtureStamp = 77;
+    float scene[277][4]{};float cam[6][4];camera(cam);std::memcpy(scene+270,cam,sizeof(cam));
+    {const uint32_t stamp=kFixtureStamp;std::memcpy(&scene[276][0],&stamp,4);}
     bd={};bd.ByteWidth=sizeof(scene);bd.Usage=D3D11_USAGE_DEFAULT;bd.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
     initial.pSysMem=scene;ComPtr<ID3D11Buffer> now,old;
     check(SUCCEEDED(device->CreateBuffer(&bd,&initial,now.GetAddressOf())) &&
@@ -200,7 +207,7 @@ int main(int argc,char** argv) {
     record[73]=bits(-.3125f);record[74]=bits(0);record[75]=bits(2.5f);
     edvr::engine_velocity_emit::Pose np{{record[4],record[5],record[6],record[2],record[3]}};
     edvr::engine_velocity_emit::Pose pp{{record[73],record[74],record[75],record[78],record[79]}};
-    record[72]=0x7FC0ED01u^edvr::engine_velocity_emit::markerHash(np,pp);
+    record[72]=0x7FC0ED01u^edvr::engine_velocity_emit::markerHash(np,pp,kFixtureStamp);
     context->UpdateSubresource(pool.Get(),0,nullptr,record,0,0);
     slots[(8*w+8)*2]=1;context->UpdateSubresource(slotTexture.Get(),0,nullptr,slots.data(),w*8,0);
     ++f.frame;run(true);
@@ -210,7 +217,7 @@ int main(int argc,char** argv) {
     for(unsigned kind=0;kind<3;++kind){
         if(kind==0)slots[(8*w+8)*2]=2; // corrupt even code
         if(kind==1){slots[(8*w+8)*2]=1;slots[(8*w+8)*2+1]=.02f;} // stale depth
-        if(kind==2){slots[(8*w+8)*2+1]=.01f;record[72]=0x7FC0ED02u^edvr::engine_velocity_emit::markerHash(np,pp);context->UpdateSubresource(pool.Get(),0,nullptr,record,0,0);}
+        if(kind==2){slots[(8*w+8)*2+1]=.01f;record[72]=0x7FC0ED02u^edvr::engine_velocity_emit::markerHash(np,pp,kFixtureStamp);context->UpdateSubresource(pool.Get(),0,nullptr,record,0,0);}
         context->UpdateSubresource(slotTexture.Get(),0,nullptr,slots.data(),w*8,0);++f.frame;
         auto rejected=run(true);check(observedReject==255 && pixel(rejected.Get())==0xff0000ff,"corrupt/stale/masked pixel displays current color");
     }
@@ -313,6 +320,126 @@ int main(int argc,char** argv) {
     bindOriginal();ComPtr<ID3D11ShaderResourceView> badJitter;
     check(!edvr::flatMonoResolveSpatialFallback(device.Get(),context.Get(),f,badJitter.GetAddressOf(),&fallbackReason) &&
           !badJitter && restored(),"nonfinite jitter cannot silently reach spatial fallback");
+    // Gate 2 step 2 (design doc section 72): a supersampled render (R > D) on
+    // the NVIDIA route evaluates DLAA at E = R on both axes, and the resolved
+    // output view is R-sized so the game's own copy downsamples it to D.
+    {
+        const UINT w2=w*2,h2=h*2;
+        std::vector<uint32_t> red2(w2*h2,0xff0000ff);std::vector<float> z2(w2*h2,.01f);
+        std::vector<float> slots2(w2*h2*2);for(size_t i=0;i<slots2.size();i+=2){slots2[i]=-1;slots2[i+1]=.01f;}
+        auto color2=texture(device.Get(),w2,h2,DXGI_FORMAT_R8G8B8A8_UNORM,D3D11_BIND_SHADER_RESOURCE,red2.data(),w2*4);
+        auto depth2=texture(device.Get(),w2,h2,DXGI_FORMAT_R32_FLOAT,D3D11_BIND_SHADER_RESOURCE,z2.data(),w2*4);
+        auto slotTexture2=texture(device.Get(),w2,h2,DXGI_FORMAT_R32G32_FLOAT,D3D11_BIND_SHADER_RESOURCE,slots2.data(),w2*8);
+        auto colorView2=view(device.Get(),color2.Get()),depthView2=view(device.Get(),depth2.Get()),slotView2=view(device.Get(),slotTexture2.Get());
+        edvr::FlatMonoResolveFrame f2{};f2.color=colorView2.Get();f2.depth=depthView2.Get();
+        f2.renderWidth=w2;f2.renderHeight=h2;f2.outputWidth=w;f2.outputHeight=h;f2.deltaMs=16;
+        camera(f2.camera);camera(f2.previousCamera);
+        f2.engine={slotView2.Get(),poolView.Get(),now.Get(),old.Get()};
+        f2.mode=edvr::FlatMonoResolveMode::Dlss;f2.frame=1;
+        expectedJx=expectedJy=0;  // this block runs unjittered
+        edvr::FlatMonoResolvePreflight planned2{};planned2.renderWidth=w2;planned2.renderHeight=h2;
+        planned2.outputWidth=w;planned2.outputHeight=h;planned2.mode=f2.mode;
+        planned2.colorViewFormat=DXGI_FORMAT_R8G8B8A8_UNORM;planned2.depthViewFormat=DXGI_FORMAT_R32_FLOAT;
+        auto preflight2=edvr::flatMonoResolvePreflight(device.Get(),context.Get(),planned2);
+        check(preflight2.readyForRasterJitter() && preflight2.backendAvailable,
+              "supersampled preflight is ready with backend creation deferred");
+        bindOriginal();ComPtr<ID3D11ShaderResourceView> out2;const char* reason2=nullptr;
+        check(edvr::flatMonoResolve(device.Get(),context.Get(),f2,out2.GetAddressOf(),&reason2) && out2,
+              "supersampled DLSS frame resolves via DLAA at render size");
+        if(reason2)std::printf("info: supersample resolver reason %s\n",reason2);
+        check(restored(),"supersampled resolve restores the complete original pipeline");
+        check(observedInW==w2 && observedInH==h2 && observedOutW==w2 && observedOutH==h2,
+              "backend evaluates the supersample route at render size on both axes");
+        ComPtr<ID3D11Resource> outResource2;if(out2)out2->GetResource(outResource2.GetAddressOf());
+        ComPtr<ID3D11Texture2D> outTexture2;if(outResource2)outResource2.As(&outTexture2);
+        D3D11_TEXTURE2D_DESC outDesc2{};if(outTexture2)outTexture2->GetDesc(&outDesc2);
+        check(outDesc2.Width==w2 && outDesc2.Height==h2,
+              "the supersampled output view is render-sized for the game's downsample");
+        check(pixel(out2.Get(),16,16)==0xff0000ff,"supersampled reset displays current render-size color");
+        // FSR mirrors NVIDIA here: Native AA is the 1.0x case of the same
+        // upscaler, evaluating at render size for the game's downsample.
+        f2.mode=edvr::FlatMonoResolveMode::Fsr;f2.frame=2;
+        bindOriginal();ComPtr<ID3D11ShaderResourceView> outFsr;reason2=nullptr;
+        check(edvr::flatMonoResolve(device.Get(),context.Get(),f2,outFsr.GetAddressOf(),&reason2) && outFsr,
+              "supersampled FSR frame resolves via Native AA at render size");
+        if(reason2)std::printf("info: supersample FSR resolver reason %s\n",reason2);
+        check(restored(),"supersampled FSR resolve restores the complete original pipeline");
+        check(observedInW==w2 && observedInH==h2 && observedOutW==w2 && observedOutH==h2,
+              "FSR evaluates the supersample route at render size on both axes");
+        // TAA at R > D evaluates on the display grid today (the route's
+        // honest report): the resolved view stays D-sized.
+        f2.mode=edvr::FlatMonoResolveMode::Taa;f2.frame=3;
+        bindOriginal();ComPtr<ID3D11ShaderResourceView> outTaa;reason2=nullptr;
+        check(edvr::flatMonoResolve(device.Get(),context.Get(),f2,outTaa.GetAddressOf(),&reason2) && outTaa,
+              "supersampled TAA frame resolves on the display grid");
+        if(reason2)std::printf("info: supersample TAA resolver reason %s\n",reason2);
+        ComPtr<ID3D11Resource> outResTaa;if(outTaa)outTaa->GetResource(outResTaa.GetAddressOf());
+        ComPtr<ID3D11Texture2D> outTexTaa;if(outResTaa)outResTaa.As(&outTexTaa);
+        D3D11_TEXTURE2D_DESC outDescTaa{};if(outTexTaa)outTexTaa->GetDesc(&outDescTaa);
+        check(outDescTaa.Width==w && outDescTaa.Height==h,
+              "the display-grid TAA output stays display-sized at supersampling");
+    }
+    // Gate-2 review F1: the negotiated evaluation size is part of the resolve's
+    // resource cache key, and the preflight carries it. A cut E must reallocate
+    // at the cut size (never reuse the route-default cache), restoring the
+    // default reallocates back, and a preflight carrying the same cut lets the
+    // first treated frame hit that cache instead of reallocating.
+    {
+        expectedJx=expectedJy=0;  // this block runs unjittered
+        edvr::FlatMonoResolveFrame fc{};fc.color=colorView.Get();fc.depth=depthView.Get();
+        fc.renderWidth=w;fc.renderHeight=h;fc.outputWidth=32;fc.outputHeight=32;fc.deltaMs=16;
+        camera(fc.camera);camera(fc.previousCamera);
+        fc.engine={slotView.Get(),poolView.Get(),now.Get(),old.Get()};
+        fc.mode=edvr::FlatMonoResolveMode::Dlss;fc.frame=1;
+        const auto cutBase=edvr::flatMonoResolveStats();
+        bindOriginal();ComPtr<ID3D11ShaderResourceView> outDefault;const char* cutReason=nullptr;
+        check(edvr::flatMonoResolve(device.Get(),context.Get(),fc,outDefault.GetAddressOf(),&cutReason) && outDefault,
+              "default-E frame resolves on the route's evaluation grid");
+        if(cutReason)std::printf("info: cut-probe default reason %s\n",cutReason);
+        check(restored(),"default-E resolve restores the complete original pipeline");
+        check(observedInW==w && observedInH==h && observedOutW==32 && observedOutH==32,
+              "backend evaluates the default route at display size");
+        check(edvr::flatMonoResolveStats().allocations==cutBase.allocations+1,
+              "default-E frame allocates the route-default resource set once");
+        ++fc.frame;fc.evalWidth=fc.evalHeight=24;
+        bindOriginal();ComPtr<ID3D11ShaderResourceView> outCut;cutReason=nullptr;
+        check(edvr::flatMonoResolve(device.Get(),context.Get(),fc,outCut.GetAddressOf(),&cutReason) && outCut,
+              "cut-E frame resolves on the negotiated evaluation grid");
+        if(cutReason)std::printf("info: cut-probe cut reason %s\n",cutReason);
+        check(restored(),"cut-E resolve restores the complete original pipeline");
+        check(observedInW==w && observedInH==h && observedOutW==24 && observedOutH==24,
+              "backend evaluates the negotiated cut at its own size");
+        ComPtr<ID3D11Resource> outCutResource;if(outCut)outCut->GetResource(outCutResource.GetAddressOf());
+        ComPtr<ID3D11Texture2D> outCutTexture;if(outCutResource)outCutResource.As(&outCutTexture);
+        D3D11_TEXTURE2D_DESC outCutDesc{};if(outCutTexture)outCutTexture->GetDesc(&outCutDesc);
+        check(outCutDesc.Width==24 && outCutDesc.Height==24,
+              "the cut-E output view is cut-sized for the game's upsample");
+        check(edvr::flatMonoResolveStats().allocations==cutBase.allocations+2,
+              "a changed E reallocates rather than reusing the route-default cache");
+        ++fc.frame;fc.evalWidth=fc.evalHeight=0;
+        bindOriginal();ComPtr<ID3D11ShaderResourceView> outBack;cutReason=nullptr;
+        check(edvr::flatMonoResolve(device.Get(),context.Get(),fc,outBack.GetAddressOf(),&cutReason) && outBack &&
+              observedOutW==32 && observedOutH==32,
+              "dropping the override returns to the route's evaluation grid");
+        check(edvr::flatMonoResolveStats().allocations==cutBase.allocations+3,
+              "returning to the default E reallocates back");
+        edvr::FlatMonoResolvePreflight cutPlan{};cutPlan.renderWidth=w;cutPlan.renderHeight=h;
+        cutPlan.outputWidth=32;cutPlan.outputHeight=32;cutPlan.mode=fc.mode;
+        cutPlan.evalWidth=cutPlan.evalHeight=24;
+        cutPlan.colorViewFormat=DXGI_FORMAT_R8G8B8A8_UNORM;cutPlan.depthViewFormat=DXGI_FORMAT_R32_FLOAT;
+        auto cutPreflight=edvr::flatMonoResolvePreflight(device.Get(),context.Get(),cutPlan);
+        check(cutPreflight.readyForRasterJitter() && cutPreflight.spatialFallbackReady,
+              "preflight carrying the negotiated E allocates at the cut size");
+        check(edvr::flatMonoResolveStats().allocations==cutBase.allocations+4,
+              "the cut-E preflight reallocates from the default-sized cache");
+        ++fc.frame;fc.evalWidth=fc.evalHeight=24;
+        bindOriginal();ComPtr<ID3D11ShaderResourceView> outPreflighted;cutReason=nullptr;
+        check(edvr::flatMonoResolve(device.Get(),context.Get(),fc,outPreflighted.GetAddressOf(),&cutReason) && outPreflighted &&
+              observedOutW==24 && observedOutH==24,
+              "the preflighted cut-E frame resolves on the negotiated grid");
+        check(edvr::flatMonoResolveStats().allocations==cutBase.allocations+4,
+              "the first treated frame hits the preflighted cache instead of reallocating");
+    }
     context->ClearState();
     failures+=flatPixelCaptureGpuTests(device.Get(),context.Get());
     failures+=flatDrawCaptureGpuTests(device.Get(),context.Get());

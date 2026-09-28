@@ -1001,6 +1001,7 @@ HRESULT STDMETHODCALLTYPE hookedDevCreate(ID3D11Device* self, const void* first,
             noteDeviceCreateFailure(Slot, hr, first, second, FirstIsResource);
         } else if constexpr (Slot == kDevCreateBuffer) {
             const auto* desc=static_cast<const D3D11_BUFFER_DESC*>(first);
+            if(out && *out)engineVelocityBufferCreated(static_cast<ID3D11Buffer*>(*out),desc);
             if(out && *out && desc && desc->BindFlags==D3D11_BIND_CONSTANT_BUFFER && flatRuntimeActive()) {
                 const auto* initial=static_cast<const D3D11_SUBRESOURCE_DATA*>(second);
                 flatRuntimeCreateBuffer(static_cast<ID3D11Buffer*>(*out),initial?initial->pSysMem:nullptr);
@@ -2107,6 +2108,21 @@ bool captureFlatProbeShader(char stage, uint64_t hash) {
         static_cast<unsigned long long>(bytes.size()), unsigned(result.bytes), unsigned(result.existed),
         unsigned(result.error), s.flatProbeShaderDrops);
     return result.success;
+}
+
+bool flatProbeShaderLookup(char stage, uint64_t hash, const uint8_t** data, size_t* bytes) {
+    if (!g_state || !hash || !data || !bytes ||
+        (stage != 'v' && stage != 'p' && stage != 'c')) return false;
+    auto& s = *g_state;
+    std::lock_guard<std::mutex> lock(s.flatProbeShaderMutex);
+    const auto found = s.flatProbeShaders.find(std::make_pair(stage, hash));
+    if (found == s.flatProbeShaders.end()) return false;
+    // The map is node-based and entries are never mutated or erased after
+    // insert (budget-capped at creation), so the stored vector's data stays
+    // valid for the returned pointer's lifetime after the lock releases.
+    *data = found->second.data();
+    *bytes = found->second.size();
+    return true;
 }
 
 // The two entries the investigation turns on, named at install. See the header

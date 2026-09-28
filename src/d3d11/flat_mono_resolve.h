@@ -9,10 +9,78 @@ struct ID3D11ShaderResourceView;
 
 namespace edvr {
 enum class FlatMonoResolveMode { Taa, Dlaa, Dlss, Fsr };
+
+// The three sizes of the staged program's gate 2 (docs/design-flat-temporal-aa-2026-09-23.md
+// section 72): the game's render size R, the temporal evaluation size E and
+// the present size D, with the effective route named honestly -- refused
+// pairings refuse, they do not silently substitute. The resolve's own
+// refusals use failReason verbatim (flat_mono_resolve.cpp).
+struct FlatResolveRoute {
+    uint32_t evalWidth = 0, evalHeight = 0;   // E; zero when refused
+    const char* name = "invalid";
+    const char* failReason = "flat-resolve-invalid-route";  // stable refusal token
+    bool refused = true;
+};
+inline FlatResolveRoute flatResolveRoute(FlatMonoResolveMode mode,
+                                         uint32_t rW, uint32_t rH, uint32_t dW, uint32_t dH) {
+    FlatResolveRoute out{};
+    if (!rW || !rH || !dW || !dH) return out;
+    const bool smaller = rW < dW || rH < dH, larger = rW > dW || rH > dH;
+    if (mode == FlatMonoResolveMode::Taa) {
+        // The current TAA evaluates on the display grid: allocation, dispatch
+        // and shader indexing all run at D, sampling render-sized input -- a
+        // fused display-grid TAA, honestly named. The agreed render-grid TAA
+        // with one explicit R -> D conversion is the deferred gate-2 design
+        // step; the route reports what actually runs today (gate-2 review G2-2).
+        out.evalWidth = dW; out.evalHeight = dH; out.refused = false;
+        out.name = !smaller && !larger ? "taa-native"
+                 : larger ? "taa-display-grid-down" : "taa-display-grid-up";
+        return out;
+    }
+    if (mode == FlatMonoResolveMode::Dlaa) {
+        if (smaller) {
+            out.name = "dlaa-requires-native";
+            out.failReason = "flat-dlaa-requires-native-render-size";
+            return out;
+        }
+        out.evalWidth = rW; out.evalHeight = rH; out.refused = false;
+        out.name = larger ? "dlaa-supersample" : "dlaa-native";
+        return out;
+    }
+    if (mode == FlatMonoResolveMode::Dlss) {
+        if (larger) {
+            // The honest NVIDIA reading of "DLSS" with supersampling: DLSS at
+            // 100% is DLAA, so evaluate at R and let the game's own copy
+            // downsample E = R to D. One final scaling step, nothing hidden.
+            out.evalWidth = rW; out.evalHeight = rH; out.refused = false;
+            out.name = "dlss-as-dlaa-supersample";
+            return out;
+        }
+        out.evalWidth = dW; out.evalHeight = dH; out.refused = false;
+        out.name = smaller ? "trained-upscale" : "trained-native";
+        return out;
+    }
+    // FSR: Native AA is the 1.0x case of the same upscaler (equal render and
+    // upscale sizes, already exercised on the R == D route), so supersampling
+    // mirrors NVIDIA: evaluate at E = R and let the game's copy downsample.
+    if (larger) {
+        out.evalWidth = rW; out.evalHeight = rH; out.refused = false;
+        out.name = "fsr-native-aa-supersample";
+        return out;
+    }
+    out.evalWidth = dW; out.evalHeight = dH; out.refused = false;
+    out.name = smaller ? "trained-upscale" : "trained-native";
+    return out;
+}
 struct FlatMonoResolveFrame {
     ID3D11ShaderResourceView* color = nullptr;
     ID3D11ShaderResourceView* depth = nullptr;
     uint32_t renderWidth = 0, renderHeight = 0, outputWidth = 0, outputHeight = 0;
+    // Optional negotiated evaluation size override (gate 2 step 4): nonzero
+    // overrides the route's default E. Only the driver sets it, from the
+    // vendor's queried ranges; the resolver uses it only when the route
+    // itself is not refused.
+    uint32_t evalWidth = 0, evalHeight = 0;
     float camera[6][4] = {}, previousCamera[6][4] = {}; // unjittered b1[270..275]
     // Actual raster phases in render pixels, positive right/down. Camera rows
     // and engine scene snapshots above remain raw and unjittered. Zero defaults
@@ -31,6 +99,10 @@ struct FlatMonoResolveFrame {
 // size-specific feature from incomplete or stale inputs.
 struct FlatMonoResolvePreflight {
     uint32_t renderWidth = 0, renderHeight = 0, outputWidth = 0, outputHeight = 0;
+    // Negotiated evaluation size override, same contract as the frame's: the
+    // preflight allocates at the E the resolve will evaluate at (gate-2 review
+    // F1), because the resolve's resource cache keys on E.
+    uint32_t evalWidth = 0, evalHeight = 0;
     FlatMonoResolveMode mode = FlatMonoResolveMode::Taa;
     DXGI_FORMAT colorViewFormat = DXGI_FORMAT_UNKNOWN;
     DXGI_FORMAT depthViewFormat = DXGI_FORMAT_UNKNOWN;

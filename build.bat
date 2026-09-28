@@ -491,6 +491,7 @@ cl.exe %CFLAGS% %NGXFLAGS% %FSRFLAGS% /Fo"%OBJ%\d3d11"\ ^
     "src\d3d11\native_menu.cpp" ^
     "src\d3d11\native_temporal.cpp" "src\d3d11\flat_temporal.cpp" "src\d3d11\flat_compute_capture.cpp" "src\d3d11\flat_compute_readback.cpp" ^
     "src\d3d11\flat_runtime.cpp" "src\d3d11\flat_mono_resolve.cpp" "src\d3d11\flat_projection_scope.cpp" "src\d3d11\flat_projection_runtime.cpp" ^
+    "src\d3d11\flat_camera_producer_probe.cpp" ^
     "src\d3d11\native_sharpen.cpp" ^
     "src\d3d11\native_frame.cpp" ^
     "src\d3d11\native_fss.cpp" ^
@@ -1045,6 +1046,7 @@ if not exist "%OBJ%\flattemporaltest" mkdir "%OBJ%\flattemporaltest"
 cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
     /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\flattemporaltest"\ ^
     /Fe"%BUILD%\flat_temporal_test.exe" "tools\flat_temporal_test\flat_temporal_test.cpp" ^
+    "third_party\dxbc_hash\DxilHash.cpp" ^
     /link /INCREMENTAL:NO kernel32.lib
 if errorlevel 1 ( echo [edvr] ERROR: flat temporal test build failed & exit /b 1 )
 "%BUILD%\flat_temporal_test.exe" --self-test || exit /b 1
@@ -1062,6 +1064,39 @@ if errorlevel 1 ( echo [edvr] ERROR: flat mono resolve test build failed & exit 
 "%BUILD%\flat_mono_resolve_test.exe" --self-test || exit /b 1
 python "tools\flat_pixels.py" "%BUILD%\flat-pixel-fixture" --verify-fixture || exit /b 1
 python "tools\flat_draw_pixels.py" "%BUILD%\flat-pixel-fixture" --verify-fixture || exit /b 1
+exit /b 0
+
+:rig_c2_derive_test
+echo [edvr] === c2_derive_test.exe ===
+if not exist "%OBJ%\c2derive" mkdir "%OBJ%\c2derive"
+cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\c2derive\\" ^
+    /Fe"%BUILD%\c2_derive_test.exe" "tools\c2_derive_test\c2_derive_test.cpp" ^
+    /link /INCREMENTAL:NO kernel32.lib
+if errorlevel 1 ( echo [edvr] ERROR: c2 derive test build failed & exit /b 1 )
+"%BUILD%\c2_derive_test.exe" --self-test || exit /b 1
+exit /b 0
+
+:rig_c2_warp_test
+echo [edvr] === c2_warp_test.exe ===
+if not exist "%OBJ%\c2warp" mkdir "%OBJ%\c2warp"
+cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\c2warp\\" ^
+    /Fe"%BUILD%\c2_warp_test.exe" "tools\c2_warp_test\c2_warp_test.cpp" ^
+    /link /INCREMENTAL:NO d3d11.lib dxgi.lib d3dcompiler.lib
+if errorlevel 1 ( echo [edvr] ERROR: c2 warp test build failed & exit /b 1 )
+"%BUILD%\c2_warp_test.exe" --self-test || exit /b 1
+exit /b 0
+
+:rig_c2_coexist_test
+echo [edvr] === c2_coexist_test.exe ===
+if not exist "%OBJ%\c2coexist" mkdir "%OBJ%\c2coexist"
+cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 /DWIN32_LEAN_AND_MEAN /DNOMINMAX ^
+    /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\c2coexist\\" ^
+    /Fe"%BUILD%\c2_coexist_test.exe" "tools\c2_coexist_test\c2_coexist_test.cpp" ^
+    /link /INCREMENTAL:NO kernel32.lib
+if errorlevel 1 ( echo [edvr] ERROR: c2 coexist test build failed & exit /b 1 )
+"%BUILD%\c2_coexist_test.exe" --self-test || exit /b 1
 exit /b 0
 
 :rig_config_test

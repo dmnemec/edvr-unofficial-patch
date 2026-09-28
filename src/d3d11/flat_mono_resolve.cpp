@@ -30,7 +30,7 @@ struct State {
     ComPtr<ID3D11Buffer> constants;
     ComPtr<ID3D11SamplerState> sampler;
     Image color, depth[2], motion, rejection, expected, output[2];
-    uint32_t width=0, height=0, outWidth=0, outHeight=0, current=0;
+    uint32_t width=0, height=0, outWidth=0, outHeight=0, evalWidth=0, evalHeight=0, current=0;
     uint64_t lastFrame=0;
     FlatMonoResolveMode mode=FlatMonoResolveMode::Taa;
     bool history=false;
@@ -98,14 +98,12 @@ bool preflightMetadataValid(const FlatMonoResolvePreflight& f,const char** reaso
         if(reason)*reason="flat-preflight-invalid-mode";
         return false;
     }
-    if(f.mode==FlatMonoResolveMode::Dlaa &&
-       (f.renderWidth!=f.outputWidth || f.renderHeight!=f.outputHeight)) {
-        if(reason)*reason="flat-preflight-dlaa-requires-native-render-size";
-        return false;
-    }
-    if(f.mode!=FlatMonoResolveMode::Taa &&
-       (f.renderWidth>f.outputWidth || f.renderHeight>f.outputHeight)) {
-        if(reason)*reason="flat-preflight-trained-resolve-cannot-downsample";
+    // Gate 2 step 2: the route table owns the size refusals (section 72); the
+    // preflight's reason tokens keep their preflight prefixes.
+    const auto route = flatResolveRoute(f.mode, f.renderWidth, f.renderHeight, f.outputWidth, f.outputHeight);
+    if (route.refused) {
+        if (reason) *reason = f.mode==FlatMonoResolveMode::Dlaa ?
+            "flat-preflight-dlaa-requires-native-render-size" : "flat-preflight-trained-resolve-cannot-downsample";
         return false;
     }
     const bool colorFormat=f.colorViewFormat==DXGI_FORMAT_R8G8B8A8_UNORM ||
@@ -178,14 +176,23 @@ bool initialize(ID3D11Device* device,ID3D11DeviceContext* context,const char** r
     return true;
 }
 bool resources(const FlatMonoResolveFrame& f,const char** reason) {
+    const auto route = flatResolveRoute(f.mode, f.renderWidth, f.renderHeight, f.outputWidth, f.outputHeight);
+    const uint32_t evalW = route.refused ? f.outputWidth :
+        (f.evalWidth && f.evalHeight) ? f.evalWidth : route.evalWidth;
+    const uint32_t evalH = route.refused ? f.outputHeight :
+        (f.evalWidth && f.evalHeight) ? f.evalHeight : route.evalHeight;
+    // The negotiated E is part of the resource identity (gate-2 review F1): a
+    // cache keyed only on mode/R/D would hand a D-sized cache to a cut E, and
+    // the finish pass would fill only the E rectangle of it.
     if(g.width==f.renderWidth && g.height==f.renderHeight && g.outWidth==f.outputWidth &&
-       g.outHeight==f.outputHeight && g.mode==f.mode)return true;
+       g.outHeight==f.outputHeight && g.mode==f.mode &&
+       g.evalWidth==evalW && g.evalHeight==evalH)return true;
     ++stats.allocations;
     g.color={};g.depth[0]={};g.depth[1]={};g.motion={};g.rejection={};g.expected={};g.output[0]={};g.output[1]={};
-    g.width=g.height=g.outWidth=g.outHeight=0;g.current=0;g.history=false;
+    g.width=g.height=g.outWidth=g.outHeight=0;g.evalWidth=g.evalHeight=0;g.current=0;g.history=false;
     const bool taa=f.mode==FlatMonoResolveMode::Taa;
     auto make=[&](Image& out,DXGI_FORMAT format,bool output=false,bool writable=true) {
-        return image(g.device.Get(),output?f.outputWidth:f.renderWidth,output?f.outputHeight:f.renderHeight,format,out,writable);
+        return image(g.device.Get(),output?evalW:f.renderWidth,output?evalH:f.renderHeight,format,out,writable);
     };
     if(!make(g.color,DXGI_FORMAT_R8G8B8A8_UNORM,false,false) || !make(g.depth[0],DXGI_FORMAT_R32_FLOAT) ||
        !make(g.motion,DXGI_FORMAT_R16G16_FLOAT) || !make(g.rejection,DXGI_FORMAT_R8_UNORM) ||
@@ -194,6 +201,7 @@ bool resources(const FlatMonoResolveFrame& f,const char** reason) {
        (taa && (!make(g.depth[1],DXGI_FORMAT_R32_FLOAT) || !make(g.expected,DXGI_FORMAT_R32_FLOAT))))
         return fail(reason,"flat-resolve-texture-create-failed");
     g.width=f.renderWidth;g.height=f.renderHeight;g.outWidth=f.outputWidth;g.outHeight=f.outputHeight;g.mode=f.mode;
+    g.evalWidth=evalW;g.evalHeight=evalH;
     return true;
 }
 bool inputTexture(ID3D11ShaderResourceView* view,uint32_t width,uint32_t height,bool color,ComPtr<ID3D11Texture2D>& out) {
@@ -238,15 +246,23 @@ FlatMonoResolvePreflightResult flatMonoResolvePreflight(ID3D11Device* device,
     frame.renderWidth=planned.renderWidth;frame.renderHeight=planned.renderHeight;
     frame.outputWidth=planned.outputWidth;frame.outputHeight=planned.outputHeight;
     frame.mode=planned.mode;
+    frame.evalWidth=planned.evalWidth;frame.evalHeight=planned.evalHeight;
     if(!resources(frame,&why)) {
         result.status=FlatMonoResolvePreflightStatus::FallbackUnavailable;
         result.reason=why?why:"flat-preflight-resource-allocation-failed";
         return result;
     }
+    const auto plannedRoute=flatResolveRoute(planned.mode,planned.renderWidth,planned.renderHeight,
+                                             planned.outputWidth,planned.outputHeight);
+    const uint32_t plannedEvalW=plannedRoute.refused?planned.outputWidth:
+        (planned.evalWidth&&planned.evalHeight)?planned.evalWidth:plannedRoute.evalWidth;
+    const uint32_t plannedEvalH=plannedRoute.refused?planned.outputHeight:
+        (planned.evalWidth&&planned.evalHeight)?planned.evalHeight:plannedRoute.evalHeight;
     result.spatialFallbackReady=g.spatial && g.constants && g.sampler &&
         g.output[1].texture && g.output[1].srv && g.output[1].uav &&
         g.width==planned.renderWidth && g.height==planned.renderHeight &&
         g.outWidth==planned.outputWidth && g.outHeight==planned.outputHeight &&
+        g.evalWidth==plannedEvalW && g.evalHeight==plannedEvalH &&
         g.mode==planned.mode;
     if(!result.spatialFallbackReady) {
         result.status=FlatMonoResolvePreflightStatus::FallbackUnavailable;
@@ -290,10 +306,17 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
        !std::isfinite(f.deltaMs) || f.deltaMs<0 || !cameraValid(f.camera) || !jitterValid(f))return fail(reason,"flat-resolve-invalid-frame");
     if(f.mode!=FlatMonoResolveMode::Taa && f.mode!=FlatMonoResolveMode::Dlaa && f.mode!=FlatMonoResolveMode::Dlss &&
        f.mode!=FlatMonoResolveMode::Fsr)return fail(reason,"flat-resolve-invalid-mode");
-    if(f.mode==FlatMonoResolveMode::Dlaa && (f.renderWidth!=f.outputWidth || f.renderHeight!=f.outputHeight))
-        return fail(reason,"flat-dlaa-requires-native-render-size");
-    if(f.mode!=FlatMonoResolveMode::Taa && (f.renderWidth>f.outputWidth || f.renderHeight>f.outputHeight))
-        return fail(reason,"flat-trained-resolve-cannot-downsample");
+    // Gate 2 step 2 (design doc section 72): the route table owns the size
+    // refusals. NVIDIA supersampling (R > D) evaluates DLAA at R and lets the
+    // game's own copy downsample E = R to D; FSR refuses R > D until the
+    // port's Native AA qualifies.
+    const auto route = flatResolveRoute(f.mode, f.renderWidth, f.renderHeight, f.outputWidth, f.outputHeight);
+    if (route.refused) return fail(reason, route.failReason);
+    // The evaluation grid E from the route contract, with the driver's
+    // negotiated override honored when present (gate 2 step 4). One contract
+    // drives allocation, dispatch and telemetry (gate-2 review G2-2).
+    const uint32_t evalW = (!route.refused && f.evalWidth && f.evalHeight) ? f.evalWidth : route.evalWidth;
+    const uint32_t evalH = (!route.refused && f.evalWidth && f.evalHeight) ? f.evalHeight : route.evalHeight;
     if(!initialize(device,context,reason))return false;
     ComPtr<ID3D11Texture2D> color,depth;
     if(!inputTexture(f.color,f.renderWidth,f.renderHeight,true,color) ||
@@ -318,7 +341,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     const uint32_t index=taa?g.current:0;
     Constants constants{};std::memcpy(constants.camera,f.camera,sizeof(f.camera));
     std::memcpy(constants.previous,reset?f.camera:f.previousCamera,sizeof(f.previousCamera));
-    constants.size[0]=f.renderWidth;constants.size[1]=f.renderHeight;constants.size[2]=f.outputWidth;constants.size[3]=f.outputHeight;
+    constants.size[0]=f.renderWidth;constants.size[1]=f.renderHeight;constants.size[2]=evalW;constants.size[3]=evalH;
     constants.flags[0]=reset;constants.flags[1]=engine;constants.flags[2]=taa;
     constants.jitter[0]=f.jitterX;constants.jitter[1]=f.jitterY;
     constants.jitter[2]=f.previousJitterX;constants.jitter[3]=f.previousJitterY;
@@ -345,11 +368,11 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
     } else if(f.mode==FlatMonoResolveMode::Fsr) {
         const float sy=std::sqrt(f.camera[0][1]*f.camera[0][1]+f.camera[1][1]*f.camera[1][1]+f.camera[2][1]*f.camera[2][1]);
         ok=fsr3Evaluate(context,0,g.color.texture.Get(),g.depth[0].texture.Get(),g.motion.texture.Get(),g.rejection.texture.Get(),
-            g.output[0].texture.Get(),f.renderWidth,f.renderHeight,f.outputWidth,f.outputHeight,f.jitterX,f.jitterY,reset,f.deltaMs,
+            g.output[0].texture.Get(),f.renderWidth,f.renderHeight,evalW,evalH,f.jitterX,f.jitterY,reset,f.deltaMs,
             f.camera[3][2],(std::numeric_limits<float>::max)(),2*std::atan(1/sy),reason,true);
     } else {
         ok=dlaaEvaluate(context,0,g.color.texture.Get(),g.depth[0].texture.Get(),g.motion.texture.Get(),g.output[0].texture.Get(),
-            g.rejection.texture.Get(),f.renderWidth,f.renderHeight,f.outputWidth,f.outputHeight,f.jitterX,f.jitterY,reset,f.deltaMs,reason);
+            g.rejection.texture.Get(),f.renderWidth,f.renderHeight,evalW,evalH,f.jitterX,f.jitterY,reset,f.deltaMs,reason);
     }
     if(!ok) {++stats.backendFailures;g.history=false;stats.currentContinueRun=0;return false;}
     if(!taa) {
@@ -362,7 +385,7 @@ bool flatMonoResolve(ID3D11Device* device,ID3D11DeviceContext* context,const Fla
         context->CSSetShaderResources(0,8,views);
         ID3D11SamplerState* sampler=g.sampler.Get();context->CSSetSamplers(0,1,&sampler);
         ID3D11UnorderedAccessView* out=g.output[1].uav.Get();context->CSSetUnorderedAccessViews(4,1,&out,nullptr);
-        context->CSSetShader(g.finish.Get(),nullptr,0);context->Dispatch((f.outputWidth+7)/8,(f.outputHeight+7)/8,1);
+        context->CSSetShader(g.finish.Get(),nullptr,0);context->Dispatch((evalW+7)/8,(evalH+7)/8,1);
     }
     if(pixels.active() && (f.mode==FlatMonoResolveMode::Dlss || f.mode==FlatMonoResolveMode::Dlaa)) {
         ID3D11Texture2D* textures[]={g.color.texture.Get(),g.depth[0].texture.Get(),g.motion.texture.Get(),
@@ -430,9 +453,16 @@ bool flatMonoResolveSpatialFallback(ID3D11Device* device,ID3D11DeviceContext* co
     D3D11_SHADER_RESOURCE_VIEW_DESC colorDesc{};f.color->GetDesc(&colorDesc);
     Isolate isolated(g.context.Get(),g.isolated.Get());
     context->CopyResource(g.color.texture.Get(),color.Get());
+    // The spatial recovery runs on the route's evaluation grid, exactly as
+    // the resolve it substitutes for (section 72's supersample routes).
+    const auto route = flatResolveRoute(f.mode, f.renderWidth, f.renderHeight, f.outputWidth, f.outputHeight);
+    const uint32_t evalW = route.refused ? f.outputWidth :
+        (f.evalWidth && f.evalHeight) ? f.evalWidth : route.evalWidth;
+    const uint32_t evalH = route.refused ? f.outputHeight :
+        (f.evalWidth && f.evalHeight) ? f.evalHeight : route.evalHeight;
     Constants constants{};
     constants.size[0]=f.renderWidth;constants.size[1]=f.renderHeight;
-    constants.size[2]=f.outputWidth;constants.size[3]=f.outputHeight;
+    constants.size[2]=evalW;constants.size[3]=evalH;
     constants.jitter[0]=f.jitterX;constants.jitter[1]=f.jitterY;
     context->UpdateSubresource(g.constants.Get(),0,nullptr,&constants,0,0);
     ID3D11Buffer* cb=g.constants.Get();context->CSSetConstantBuffers(0,1,&cb);
@@ -440,7 +470,7 @@ bool flatMonoResolveSpatialFallback(ID3D11Device* device,ID3D11DeviceContext* co
     ID3D11SamplerState* sampler=g.sampler.Get();context->CSSetSamplers(0,1,&sampler);
     ID3D11UnorderedAccessView* target=g.output[1].uav.Get();context->CSSetUnorderedAccessViews(4,1,&target,nullptr);
     context->CSSetShader(g.spatial.Get(),nullptr,0);
-    context->Dispatch((f.outputWidth+7)/8,(f.outputHeight+7)/8,1);
+    context->Dispatch((evalW+7)/8,(evalH+7)/8,1);
     *output=(colorDesc.Format==DXGI_FORMAT_R8G8B8A8_UNORM_SRGB?g.output[1].srgb:g.output[1].srv).Get();
     (*output)->AddRef();
     return true;
