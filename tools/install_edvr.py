@@ -681,6 +681,10 @@ def _validate_v2_receipt(r):
     targets = {key: paths[key + "_target"] for key in ("runtime", "graphics", "loader", "notice") if key + "_target" in paths}
     if r["kind"] == NATIVE_KIND: targets["config"] = paths["config"]
     targets.update(profile=os.path.join(target, PROFILE_FILE), ini=os.path.join(target, "edvr.ini"), dlss=os.path.join(target, "nvngx_dlss.dll"))
+    for e in files:
+        if isinstance(e, dict) and isinstance(e.get("key"), str) and e["key"].startswith("plugin_"):
+            fname = e["key"][7:]
+            targets[e["key"]] = os.path.join(target, "plugins", fname)
     keys = [e["key"] for e in files]
     if len(keys) != len(set(keys)) or not required.issubset(keys) or set(keys) - targets.keys():
         raise ValueError("incomplete or duplicate EDVR v2 components")
