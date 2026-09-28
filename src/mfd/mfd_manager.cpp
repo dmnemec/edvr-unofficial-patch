@@ -290,8 +290,33 @@ void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) 
         slot.baselinePose.widthM = slot.pose.widthM;
         slot.baselinePose.heightM = slot.pose.heightM;
     } else if (key == "Color Mode") {
-        slot.useCustomColor = !slot.useCustomColor;
-        if (slot.useCustomColor) {
+        int currentMode = slot.useCustomColor ? 2 : (slot.theme == MfdColorTheme::kDefaultAmber ? 0 : 1);
+        int nextMode = (currentMode + (isLeft ? 2 : 1)) % 3;
+        if (nextMode == 0) {
+            slot.useCustomColor = false;
+            slot.theme = MfdColorTheme::kDefaultAmber;
+            slot.customColor = MfdColor(255, 110, 0, 255);
+        } else if (nextMode == 1) {
+            slot.useCustomColor = false;
+            if (slot.theme == MfdColorTheme::kDefaultAmber) {
+                slot.theme = MfdColorTheme::kCyanIce;
+            }
+            switch (slot.theme) {
+                case MfdColorTheme::kDefaultAmber:
+                    slot.customColor.r = 255; slot.customColor.g = 110; slot.customColor.b = 0; break;
+                case MfdColorTheme::kCyanIce:
+                    slot.customColor.r = 60; slot.customColor.g = 200; slot.customColor.b = 255; break;
+                case MfdColorTheme::kMatrixGreen:
+                    slot.customColor.r = 0; slot.customColor.g = 255; slot.customColor.b = 128; break;
+                case MfdColorTheme::kSolarWhite:
+                    slot.customColor.r = 220; slot.customColor.g = 230; slot.customColor.b = 240; break;
+                case MfdColorTheme::kCrimson:
+                    slot.customColor.r = 255; slot.customColor.g = 40; slot.customColor.b = 40; break;
+                case MfdColorTheme::kPurpleHaze:
+                    slot.customColor.r = 200; slot.customColor.g = 100; slot.customColor.b = 255; break;
+            }
+        } else { // nextMode == 2 (Custom RGBA)
+            slot.useCustomColor = true;
             switch (slot.theme) {
                 case MfdColorTheme::kDefaultAmber:
                     slot.customColor.r = 255; slot.customColor.g = 110; slot.customColor.b = 0; break;
@@ -325,6 +350,10 @@ void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) 
             case MfdColorTheme::kPurpleHaze:
                 slot.customColor.r = 200; slot.customColor.g = 100; slot.customColor.b = 255; break;
         }
+    } else if (key == "Reset Colors") {
+        slot.useCustomColor = false;
+        slot.theme = MfdColorTheme::kDefaultAmber;
+        slot.customColor = MfdColor(255, 110, 0, 255);
     } else if (key == "Custom Red (R)") {
         int r = static_cast<int>(slot.customColor.r) + stepInt;
         slot.customColor.r = static_cast<uint8_t>(std::clamp(r, 0, 255));
@@ -403,8 +432,17 @@ void ensureSettingsTab(MfdSlot& slot) {
     snprintf(buf, sizeof(buf), "%.2fx", slot.scale);
     settingsTab->keyValues.push_back({"Display Scale", buf, palette::kAmberNormal});
 
-    settingsTab->keyValues.push_back({"Color Mode", slot.useCustomColor ? "Custom RGBA" : "Preset Theme",
-                                      slot.useCustomColor ? palette::kSuccessGreen : palette::kCyanAccent});
+    const char* colorModeLabel = "Default (Amber)";
+    MfdColor colorModeColor = palette::kAmberBright;
+    if (slot.useCustomColor) {
+        colorModeLabel = "Custom (RGBA)";
+        colorModeColor = palette::kSuccessGreen;
+    } else if (slot.theme != MfdColorTheme::kDefaultAmber) {
+        colorModeLabel = "Preset Theme";
+        colorModeColor = palette::kCyanAccent;
+    }
+
+    settingsTab->keyValues.push_back({"Color Mode", colorModeLabel, colorModeColor});
 
     if (slot.useCustomColor) {
         snprintf(buf, sizeof(buf), "#%02X%02X%02X (%d)", slot.customColor.r, slot.customColor.g, slot.customColor.b, slot.customColor.r);
@@ -418,8 +456,12 @@ void ensureSettingsTab(MfdSlot& slot) {
 
         snprintf(buf, sizeof(buf), "%.0f%% (%d)", (slot.customColor.a / 255.0f) * 100.0f, slot.customColor.a);
         settingsTab->keyValues.push_back({"Custom Brightness (A)", buf, palette::kCyanAccent});
+        settingsTab->keyValues.push_back({"Reset Colors", "[RESTORE DEFAULTS]", palette::kAmberDim});
     } else {
         settingsTab->keyValues.push_back({"Preset Theme", themeName(slot.theme), palette::kCyanAccent});
+        if (slot.theme != MfdColorTheme::kDefaultAmber) {
+            settingsTab->keyValues.push_back({"Reset Colors", "[RESTORE DEFAULTS]", palette::kAmberDim});
+        }
     }
 
     settingsTab->keyValues.push_back({"Auto-Hide Gaze", slot.autoHideUntilGaze ? "Enabled (Fade)" : "Disabled (Always On)",
