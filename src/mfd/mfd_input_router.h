@@ -4,27 +4,45 @@
 #include "mfd_provider.h"
 #include <cstdint>
 #include <vector>
+#include <string>
 
 namespace edvr::mfd {
 
-// Virtual-key and button mappings for cockpit UI navigation.
-struct MfdKeyMapping {
-    int vkUp = 0x26;        // VK_UP (or 'W')
-    int vkDown = 0x28;      // VK_DOWN (or 'S')
-    int vkLeft = 0x25;      // VK_LEFT (or 'A')
-    int vkRight = 0x27;     // VK_RIGHT (or 'D')
-    int vkSelect = 0x20;    // VK_SPACE (or VK_RETURN)
-    int vkBack = 0x08;      // VK_BACK (or VK_ESCAPE)
-    int vkNextTab = 'E';    // 'E' (or CycleNextPage)
-    int vkPrevTab = 'Q';    // 'Q' (or CyclePreviousPage)
+// Single UI action binding mapping multiple keyboard virtual keys, joystick buttons, and POV hats.
+struct MfdActionBinding {
+    std::vector<int> vkeys;
+    uint32_t joyButtonMask = 0;   // Bit 0 = Joy_1, Bit 31 = Joy_32
+    bool povUp = false;
+    bool povDown = false;
+    bool povLeft = false;
+    bool povRight = false;
 
-    // Secondary aliases (e.g. keyboard W/S/A/D alongside arrow keys):
-    int vkUpAlt = 'W';
-    int vkDownAlt = 'S';
-    int vkLeftAlt = 'A';
-    int vkRightAlt = 'D';
-    int vkSelectAlt = 0x0D; // VK_RETURN
-    int vkBackAlt = 0x1B;   // VK_ESCAPE
+    void addVk(int vk) {
+        if (vk > 0) vkeys.push_back(vk);
+    }
+
+    void addJoyButton(int btnIndex1Based) {
+        if (btnIndex1Based >= 1 && btnIndex1Based <= 32) {
+            joyButtonMask |= (1u << (btnIndex1Based - 1));
+        }
+    }
+};
+
+// Complete binding set for cockpit MFD UI navigation.
+struct MfdBindingsConfig {
+    MfdActionBinding up;
+    MfdActionBinding down;
+    MfdActionBinding left;
+    MfdActionBinding right;
+    MfdActionBinding select;
+    MfdActionBinding back;
+    MfdActionBinding nextTab;
+    MfdActionBinding prevTab;
+
+    bool loadedFromBinds = false;
+    std::string presetName;
+
+    static MfdBindingsConfig createDefault();
 };
 
 // Routes UI navigation inputs to the focused MFD while suppressing
@@ -33,8 +51,10 @@ class MfdInputRouter {
 public:
     MfdInputRouter();
 
-    void setKeyMapping(const MfdKeyMapping& mapping) { m_mapping = mapping; }
-    const MfdKeyMapping& keyMapping() const { return m_mapping; }
+    void setBindings(const MfdBindingsConfig& bindings) { m_bindings = bindings; }
+    const MfdBindingsConfig& bindings() const { return m_bindings; }
+
+    void reloadBindingsFromGame();
 
     // Edge-triggered button update:
     // Takes raw down states (from GetAsyncKeyState, DirectInput, or XInput),
@@ -55,14 +75,21 @@ public:
         bool jSel = false, jBack = false, jNext = false, jPrev = false;
         pollJoystickInputs(jUp, jDown, jLeft, jRight, jSel, jBack, jNext, jPrev);
 
-        bool up = isKeyDownFn(m_mapping.vkUp) || isKeyDownFn(m_mapping.vkUpAlt) || jUp;
-        bool down = isKeyDownFn(m_mapping.vkDown) || isKeyDownFn(m_mapping.vkDownAlt) || jDown;
-        bool left = isKeyDownFn(m_mapping.vkLeft) || isKeyDownFn(m_mapping.vkLeftAlt) || jLeft;
-        bool right = isKeyDownFn(m_mapping.vkRight) || isKeyDownFn(m_mapping.vkRightAlt) || jRight;
-        bool sel = isKeyDownFn(m_mapping.vkSelect) || isKeyDownFn(m_mapping.vkSelectAlt) || jSel;
-        bool back = isKeyDownFn(m_mapping.vkBack) || isKeyDownFn(m_mapping.vkBackAlt) || jBack;
-        bool next = isKeyDownFn(m_mapping.vkNextTab) || jNext;
-        bool prev = isKeyDownFn(m_mapping.vkPrevTab) || jPrev;
+        auto checkVks = [&](const MfdActionBinding& b) {
+            for (int vk : b.vkeys) {
+                if (isKeyDownFn(vk)) return true;
+            }
+            return false;
+        };
+
+        bool up = checkVks(m_bindings.up) || jUp;
+        bool down = checkVks(m_bindings.down) || jDown;
+        bool left = checkVks(m_bindings.left) || jLeft;
+        bool right = checkVks(m_bindings.right) || jRight;
+        bool sel = checkVks(m_bindings.select) || jSel;
+        bool back = checkVks(m_bindings.back) || jBack;
+        bool next = checkVks(m_bindings.nextTab) || jNext;
+        bool prev = checkVks(m_bindings.prevTab) || jPrev;
 
         return processInput(isMfdFocused, activeProvider, up, down, left, right, sel, back, next, prev);
     }
@@ -71,7 +98,7 @@ public:
     bool lastInputSwallowed() const { return m_lastSwallowed; }
 
 private:
-    MfdKeyMapping m_mapping;
+    MfdBindingsConfig m_bindings;
 
     // Previous frame down states for rising-edge detection:
     bool m_prevUp = false;

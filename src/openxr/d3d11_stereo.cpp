@@ -503,9 +503,9 @@ XrResult D3D11Stereo::renderCaptured(const XrView (&views)[2],XrSpace space,cons
     drawContext->UpdateSubresource(blitConstants_.Get(),0,nullptr,&constants[i],0,0);drawContext->Draw(3,0);
 
     // Cockpit MFD Overlay pass
-    edvr::Config::get().reloadIfChanged();
     if (edvr::mfd::MfdManager::instance().isEnabled()) {
       if (i == 0) {
+        edvr::Config::get().reloadIfChanged();
         const auto& hPose = views[0].pose;
         edvr::mfd::Vec3 headPos(hPose.position.x, hPose.position.y, hPose.position.z);
         edvr::mfd::Quat headRot(hPose.orientation.x, hPose.orientation.y, hPose.orientation.z, hPose.orientation.w);

@@ -244,7 +244,7 @@ void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) 
         slot.yawDeg += step * 2.0f;
         slot.pose.orientation = Quat::fromEulerDegrees(slot.pitchDeg, slot.yawDeg, 0.0f);
     } else if (key == "Glass Opacity") {
-        slot.opacity = (std::clamp)(slot.opacity + step * 0.05f, 0.10f, 1.0f);
+        slot.opacity = (std::clamp)(slot.opacity + step * 0.05f, 0.0f, 1.0f);
     } else if (key == "Display Scale") {
         slot.scale = (std::clamp)(slot.scale + step * 0.05f, 0.50f, 2.0f);
         float baseW = (slot.name == "main_mfd") ? 0.28f : 0.24f;
@@ -258,8 +258,11 @@ void handleSettingsAdjustment(MfdSlot& slot, const std::string& key, int delta) 
     } else if (key == "Auto-Hide Gaze") {
         slot.autoHideUntilGaze = !slot.autoHideUntilGaze;
     } else if (key == "Gaze Dwell Delay") {
-        float dt = slot.gazeTracker.dwellTimeThreshold() + step * 0.05f;
-        slot.gazeTracker.setDwellTimeThreshold((std::clamp)(dt, 0.0f, 1.0f));
+        float dt = slot.gazeTracker.dwellTimeThreshold() + step * 0.10f;
+        slot.gazeTracker.setDwellTimeThreshold((std::clamp)(dt, 0.05f, 4.0f));
+    } else if (key == "Focus Cone Margin") {
+        float m = slot.gazeTracker.hitMargin() + step * 0.05f;
+        slot.gazeTracker.setHitMargin((std::clamp)(m, 0.80f, 2.50f));
     } else if (key == "Off-Center Y") {
         float offY = slot.gazeTracker.anchorOffsetY() + step * 0.05f;
         slot.gazeTracker.setAnchorOffset(0.0f, (std::clamp)(offY, -0.5f, 0.5f));
@@ -282,6 +285,8 @@ void ensureSettingsTab(MfdSlot& slot) {
         newTab.type = MfdTabType::kKeyValue;
         model.tabs.push_back(std::move(newTab));
         settingsTab = &model.tabs.back();
+    } else if (model.currentTab() != settingsTab) {
+        return;
     }
 
     settingsTab->keyValues.clear();
@@ -315,6 +320,9 @@ void ensureSettingsTab(MfdSlot& slot) {
 
     snprintf(buf, sizeof(buf), "%.2f s", slot.gazeTracker.dwellTimeThreshold());
     settingsTab->keyValues.push_back({"Gaze Dwell Delay", buf, palette::kAmberNormal});
+
+    snprintf(buf, sizeof(buf), "%.2fx", slot.gazeTracker.hitMargin());
+    settingsTab->keyValues.push_back({"Focus Cone Margin", buf, palette::kAmberNormal});
 
     snprintf(buf, sizeof(buf), "%+.2f", slot.gazeTracker.anchorOffsetY());
     settingsTab->keyValues.push_back({"Off-Center Y", buf, palette::kAmberNormal});
@@ -765,25 +773,26 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
     Vec3 eyePos(eyePose.position.x, eyePose.position.y, eyePose.position.z);
     Quat eyeRot(eyePose.orientation.x, eyePose.orientation.y, eyePose.orientation.z, eyePose.orientation.w);
 
-    ComPtr<ID3D11BlendState> alphaBlendState;
-    D3D11_BLEND_DESC bd{};
-    bd.RenderTarget[0].BlendEnable = TRUE;
-    bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
-    bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-    bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-    bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-    bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
-    bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-    bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-    device->CreateBlendState(&bd, &alphaBlendState);
+    if (!m_blendState) {
+        D3D11_BLEND_DESC bd{};
+        bd.RenderTarget[0].BlendEnable = TRUE;
+        bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+        bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+        device->CreateBlendState(&bd, &m_blendState);
+    }
 
     ComPtr<ID3D11BlendState> prevBlendState;
     float prevBlendFactor[4] = {0};
     UINT prevSampleMask = 0;
     context->OMGetBlendState(&prevBlendState, prevBlendFactor, &prevSampleMask);
 
-    if (alphaBlendState) {
-        context->OMSetBlendState(alphaBlendState.Get(), nullptr, 0xFFFFFFFF);
+    if (m_blendState) {
+        context->OMSetBlendState(m_blendState.Get(), nullptr, 0xFFFFFFFF);
     }
 
     EliteStatusData status = readEliteStatus();
@@ -865,14 +874,12 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
         float vy = cy - pixH * 0.5f;
 
         // Clip to viewport bounds
-        if (vx + pixW < 0 || vx >= static_cast<float>(viewportWidth) ||
-            vy + pixH < 0 || vy >= static_cast<float>(viewportHeight)) {
+        float clipLeft = std::max(0.0f, vx);
+        float clipTop = std::max(0.0f, vy);
+        float clipRight = std::min(static_cast<float>(viewportWidth), vx + pixW);
+        float clipBottom = std::min(static_cast<float>(viewportHeight), vy + pixH);
+        if (clipRight <= clipLeft || clipBottom <= clipTop) {
             m_debugStats.inFrustum = false;
-            if (s_cullLog < 10) {
-                s_cullLog++;
-                Log::get().note("mfd_cull: off-screen bounds (vx=%.1f vy=%.1f pixW=%.1f pixH=%.1f vp=(%ux%u))\n",
-                                vx, vy, pixW, pixH, viewportWidth, viewportHeight);
-            }
             continue;
         }
 
@@ -898,12 +905,12 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
             continue;
         }
 
-        // Bind viewport for MFD overlay
+        // Bind viewport for visible sub-rectangle of MFD
         D3D11_VIEWPORT vp{};
-        vp.TopLeftX = std::max(0.0f, vx);
-        vp.TopLeftY = std::max(0.0f, vy);
-        vp.Width = std::min(static_cast<float>(viewportWidth) - vp.TopLeftX, pixW);
-        vp.Height = std::min(static_cast<float>(viewportHeight) - vp.TopLeftY, pixH);
+        vp.TopLeftX = clipLeft;
+        vp.TopLeftY = clipTop;
+        vp.Width = clipRight - clipLeft;
+        vp.Height = clipBottom - clipTop;
         vp.MinDepth = 0.0f;
         vp.MaxDepth = 1.0f;
 
@@ -923,9 +930,12 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
         context->PSSetShaderResources(0, 1, &mfdSrv);
 
         struct BlitConstants { float bounds[4]; float clampUV[4]; float encodeSRGB; float pad[3]; } cb{};
-        cb.bounds[0] = 0.0f; cb.bounds[1] = 0.0f; cb.bounds[2] = 1.0f; cb.bounds[3] = 1.0f;
+        cb.bounds[0] = (clipLeft - vx) / pixW;
+        cb.bounds[1] = (clipTop - vy) / pixH;
+        cb.bounds[2] = (clipRight - vx) / pixW;
+        cb.bounds[3] = (clipBottom - vy) / pixH;
         cb.clampUV[0] = 0.0f; cb.clampUV[1] = 0.0f; cb.clampUV[2] = 1.0f; cb.clampUV[3] = 1.0f;
-        cb.encodeSRGB = 1.0f;
+        cb.encodeSRGB = 0.0f; // Already in sRGB space
 
         if (constantsBuffer) {
             context->UpdateSubresource(constantsBuffer, 0, nullptr, &cb, 0, 0);

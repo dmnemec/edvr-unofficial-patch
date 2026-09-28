@@ -167,7 +167,7 @@ void MfdRenderer::render(const MfdViewModel& model, float backgroundOpacity, Mfd
     }
 
     // Color theme based on focus state:
-    MfdColor mainColor = model.isFocused ? paletteSet.brightColor : paletteSet.mainColor;
+    MfdColor mainColor = paletteSet.mainColor;
     MfdColor dimColor = model.isFocused ? paletteSet.mainColor : paletteSet.dimColor;
     MfdColor borderColor = model.isFocused ? paletteSet.brightColor : paletteSet.borderColor;
 

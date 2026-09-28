@@ -8,6 +8,7 @@
 #include "mfd_compositor.h"
 
 #include <d3d11.h>
+#include <wrl/client.h>
 #include <memory>
 #include <string>
 #include <vector>
@@ -115,6 +116,7 @@ private:
     std::vector<MfdSlot> m_slots;
     MfdInputRouter m_inputRouter;
     std::unique_ptr<IMfdCompositor> m_compositor;
+    Microsoft::WRL::ComPtr<ID3D11BlendState> m_blendState;
 
     void ensureDefaultSlots();
 };

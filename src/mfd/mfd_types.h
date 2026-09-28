@@ -192,41 +192,41 @@ struct MfdPaletteSet {
 
 // Signature Elite Dangerous HUD color palette.
 namespace palette {
-    constexpr MfdColor kAmberNormal(255, 113, 0, 255);    // Signature orange HUD
-    constexpr MfdColor kAmberBright(255, 175, 40, 255);   // Glowing selected text
-    constexpr MfdColor kAmberDim(140, 60, 0, 255);        // Unfocused / disabled text
-    constexpr MfdColor kCyanAccent(0, 168, 255, 255);     // Target / informational blue
-    constexpr MfdColor kAlertRed(255, 48, 48, 255);       // Danger / warning red
-    constexpr MfdColor kSuccessGreen(64, 255, 64, 255);   // Confirmed / active green
-    constexpr MfdColor kBackground(14, 12, 10, 255);       // Solid opaque cockpit display backing
-    constexpr MfdColor kFrameBorder(255, 120, 0, 255);     // Solid bright orange bezel border
+    constexpr MfdColor kAmberNormal(255, 110, 0, 255);    // Signature orange HUD
+    constexpr MfdColor kAmberBright(255, 150, 0, 255);   // Glowing selected text
+    constexpr MfdColor kAmberDim(160, 60, 0, 255);        // Unfocused / disabled text
+    constexpr MfdColor kCyanAccent(0, 190, 255, 255);     // Target / informational blue
+    constexpr MfdColor kAlertRed(255, 30, 30, 255);       // Danger / warning red
+    constexpr MfdColor kSuccessGreen(0, 240, 60, 255);    // Confirmed / active green
+    constexpr MfdColor kBackground(10, 8, 6, 255);        // Cockpit display backing
+    constexpr MfdColor kFrameBorder(255, 110, 0, 255);    // Bezel border
 
     inline MfdPaletteSet getTheme(MfdColorTheme theme) {
         switch (theme) {
             case MfdColorTheme::kCyanIce:
                 return {
-                    MfdColor(0, 180, 255), MfdColor(0, 90, 140), MfdColor(120, 225, 255),
-                    MfdColor(255, 175, 40), MfdColor(0, 190, 255), MfdColor(8, 14, 20)
+                    MfdColor(0, 180, 255), MfdColor(0, 85, 130), MfdColor(70, 220, 255),
+                    MfdColor(255, 150, 0), MfdColor(0, 200, 255), MfdColor(6, 12, 18)
                 };
             case MfdColorTheme::kMatrixGreen:
                 return {
-                    MfdColor(50, 230, 80), MfdColor(25, 115, 40), MfdColor(140, 255, 160),
-                    MfdColor(0, 200, 255), MfdColor(60, 240, 90), MfdColor(8, 18, 10)
+                    MfdColor(50, 230, 80), MfdColor(0, 110, 20), MfdColor(50, 255, 90),
+                    MfdColor(0, 190, 255), MfdColor(0, 255, 60), MfdColor(6, 16, 8)
                 };
             case MfdColorTheme::kSolarWhite:
                 return {
-                    MfdColor(220, 225, 235), MfdColor(110, 115, 125), MfdColor(255, 255, 255),
-                    MfdColor(0, 180, 255), MfdColor(230, 235, 245), MfdColor(12, 14, 18)
+                    MfdColor(230, 235, 245), MfdColor(120, 125, 135), MfdColor(255, 255, 255),
+                    MfdColor(0, 190, 255), MfdColor(240, 245, 255), MfdColor(10, 12, 16)
                 };
             case MfdColorTheme::kCrimson:
                 return {
-                    MfdColor(255, 55, 55), MfdColor(140, 25, 25), MfdColor(255, 130, 130),
-                    MfdColor(255, 180, 50), MfdColor(255, 70, 70), MfdColor(20, 10, 10)
+                    MfdColor(255, 25, 25), MfdColor(130, 10, 10), MfdColor(255, 75, 75),
+                    MfdColor(255, 150, 0), MfdColor(255, 35, 35), MfdColor(18, 8, 8)
                 };
             case MfdColorTheme::kPurpleHaze:
                 return {
-                    MfdColor(200, 100, 255), MfdColor(100, 50, 130), MfdColor(235, 170, 255),
-                    MfdColor(0, 200, 255), MfdColor(210, 110, 255), MfdColor(16, 10, 22)
+                    MfdColor(195, 55, 255), MfdColor(95, 25, 130), MfdColor(220, 95, 255),
+                    MfdColor(0, 190, 255), MfdColor(205, 65, 255), MfdColor(14, 8, 20)
                 };
             case MfdColorTheme::kDefaultAmber:
             default:

@@ -199,11 +199,22 @@ void loaderPhase() {
 // phase, and says why in the log.
 void chainThroughOtherProxy(edvr::Config& cfg) {
     const std::string configured = cfg.getString("advanced.real_dll", "");
-    if (configured.empty()) return;
-
-    std::wstring path = edvr::widenUtf8(configured);
+    std::wstring path;
+    if (!configured.empty()) {
+        path = edvr::widenUtf8(configured);
+    } else if (g_moduleDir) {
+        const wchar_t* autoTargets[] = { L"d3d11_edhm.dll", L"d3d11_reshade.dll", L"d3d11_chain.dll" };
+        for (const wchar_t* target : autoTargets) {
+            std::wstring checkPath = *g_moduleDir + L"\\" + target;
+            if (GetFileAttributesW(checkPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                path = checkPath;
+                edvr::Log::get().note("auto-detected graphics mod chain target '%S' beside the game", target);
+                break;
+            }
+        }
+    }
     if (path.empty()) return;
-    if (path.find(L':') == std::wstring::npos && path.find(L'\\') == std::wstring::npos) {
+    if (path.find(L':') == std::wstring::npos && path.find(L'\\') == std::wstring::npos && g_moduleDir) {
         path = *g_moduleDir + L"\\" + path;
     }
 
