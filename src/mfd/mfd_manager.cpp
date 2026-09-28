@@ -97,10 +97,11 @@ struct PSInput {
     float2 uv : TEXCOORD;
 };
 
+static const uint kQuadIdx[6] = { 0, 1, 2, 2, 1, 3 };
+
 PSInput vs(uint vertexId : SV_VertexID) {
     PSInput output;
-    uint idxMap[6] = { 0, 1, 2, 2, 1, 3 };
-    uint idx = idxMap[vertexId];
+    uint idx = kQuadIdx[vertexId % 6];
     output.position = clipPos[idx];
     output.uv = uv[idx].xy;
     return output;
@@ -902,14 +903,20 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
 
     if (!m_quadVs || !m_quadPs || !m_quadCb || !m_quadSampler) {
         Microsoft::WRL::ComPtr<ID3DBlob> vsBlob, psBlob, errors;
-        if (SUCCEEDED(D3DCompile(s_mfdQuadShader, std::strlen(s_mfdQuadShader), "EDVR MFD Quad VS",
-                                 nullptr, nullptr, "vs", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &vsBlob, &errors))) {
+        HRESULT hrVs = D3DCompile(s_mfdQuadShader, std::strlen(s_mfdQuadShader), "EDVR MFD Quad VS",
+                                  nullptr, nullptr, "vs", "vs_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &vsBlob, &errors);
+        if (SUCCEEDED(hrVs)) {
             device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &m_quadVs);
+        } else {
+            Log::get().note("mfd_shader: VS compile error: %s\n", errors ? (char*)errors->GetBufferPointer() : "unknown");
         }
         errors.Reset();
-        if (SUCCEEDED(D3DCompile(s_mfdQuadShader, std::strlen(s_mfdQuadShader), "EDVR MFD Quad PS",
-                                 nullptr, nullptr, "ps", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &psBlob, &errors))) {
+        HRESULT hrPs = D3DCompile(s_mfdQuadShader, std::strlen(s_mfdQuadShader), "EDVR MFD Quad PS",
+                                  nullptr, nullptr, "ps", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &psBlob, &errors);
+        if (SUCCEEDED(hrPs)) {
             device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &m_quadPs);
+        } else {
+            Log::get().note("mfd_shader: PS compile error: %s\n", errors ? (char*)errors->GetBufferPointer() : "unknown");
         }
 
         D3D11_BUFFER_DESC bd{};
