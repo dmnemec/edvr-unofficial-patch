@@ -868,9 +868,6 @@ void MfdManager::renderToEyeRtv(ID3D11Device* device, ID3D11DeviceContext* conte
 
         float zDist = -eyeLocal.z; // positive distance forward
 
-        float tanX = eyeLocal.x / zDist;
-        float tanY = eyeLocal.y / zDist;
-
         float tanLeft = std::tan(eyeFov.angleLeft);
         float tanRight = std::tan(eyeFov.angleRight);
         float tanUp = std::tan(eyeFov.angleUp);
