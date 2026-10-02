@@ -1,0 +1,34 @@
+{
+  "$schema": "../../schemas/plugin.manifest.schema.json",
+  "id": "cockpit-visuals",
+  "name": "Cockpit Visuals",
+  "description": "Cockpit visual enhancements and fixes including night vision, sun glare, particles, and RemLok.",
+  "profiles": ["VR"],
+  "dependencies": {
+    "hard": [],
+    "soft": []
+  },
+  "conflicts": {
+    "hard": [],
+    "soft": []
+  },
+  "defaults": {
+    "VR": "on",
+    "flat": "off"
+  },
+  "ini_keys_owned": [
+    "fix.night_vision_stability",
+    "experimental.night_vision_realistic",
+    "experimental.night_vision_brightness"
+  ],
+  "hook_points": ["init", "configure", "shutdown"],
+  "draw_claims": [
+    {
+      "shader_hashes": ["0xFCF7BD2896751D96", "0xF786D34B5E118D5E"],
+      "draw_kinds": ["X"],
+      "precedence": 50
+    }
+  ],
+  "cost_note": "0.01ms per eye draw when active",
+  "rigs": ["tools/verdict_replay_test"]
+}

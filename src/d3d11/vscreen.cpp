@@ -34,6 +34,11 @@
 #include "screen_motion.h"
 #include "weapon_motion.h"
 #include "night_vision.h"
+#include "draw_verdict.h"
+#include "draw_dispatch.h"
+#include "frame_services.h"
+#include "../common/plugin_registry.h"
+#include "../plugins/cockpit_visuals/cockpit_visuals_plugin.h"
 #include "device_hook.h"  // contextHookModeFor
 #include "draw_census.h"
 #include "draw_gate.h"    // the sampled subscriber gate the draw path reads
@@ -1515,45 +1520,7 @@ thread_local bool t_holoDepthThisDraw = false;
 // same take-and-clear the two flags above have, so it is only ever the draw's
 // own.
 thread_local bool t_compositeThisDraw = false;
-
-enum class DrawVerdict {
-    kNone, kPanel, kSkip, kRemlok, kHolo,
-    // The target direction indicator, reconstructed rather than smeared
-    // (target_sharp.h): forwarded through a replacement pixel shader.
-    kTargetSharp,
-    kNightVision,
-    // The intro movie's panel drawn with our constants at VS b2
-    // (intro_panel.h): forwarded normally, restored after.
-    kIntroPanel,
-    kGlareClamp, kGlareSteady, kParticle,
-    // The FSS panel composite pair (fss_panel.h): forwarded through the
-    // replacement vertex shaders, wrapped in fssPanelBegin/End.
-    kFssPanel,
-    // The body composite pair evaluated at one dissolve moment
-    // (fss_reveal.h): eye B drawn with eye A's scene constants, wrapped
-    // in fssRevealBegin/End.
-    kFssReveal,
-    kFssDump,
-    // The deferred lighting resolve drawn with the scanner-body fix's
-    // input lend (fix.scanner_body, resolve_bind_fix.h), wrapped in
-    // resolveBindBegin/End.
-    kResolveBind,
-    // A batched draw re-issued without some of its quads (advanced.
-    // census_skip_quad). Swallows the game's draw and makes up to two of its
-    // own, so it must not be combined with anything that also draws.
-    kQuadSkip,
-    // The loader dialog's backing, re-issued at the dialog's own measured
-    // size (loader_panel.h). Swallows the game's draw once a measurement has
-    // produced geometry, and forwards it untouched until then.
-    kLoaderPanel,
-    // The loader dialog's dimming wash (scrim_fix.h), held uniform for
-    // the one draw that composites the interface.
-    kScrim,
-    // The menu backdrop blit (backdrop_fix.h): the still it samples is
-    // substituted for a debanded copy of itself, wrapped in
-    // backdropBegin/End.
-    kBackdrop
-};
+// DrawVerdict is declared in draw_verdict.h for cross-plugin dispatch.
 
 // THE SHADOW'S AUDIT (2026-09-09). The heat haze's skip went silent the
 // flight after the binding shadow replaced its VSGetShader -- 15:13, three
@@ -1706,6 +1673,7 @@ bool drawGateSubscribed(State* s) {
         scrimWantsDraws() || quadProbeWants() || loaderPanelWants() ||
         introProbeWants() || introPanelWants() ||
         wakePulseWantsDraws() || nightVisionWantsDraws() ||
+        PluginRegistry::get().wantsDrawGate() ||
         witchspaceStarsHidden() || depthProbeWanted() ||
         vscreenFootprintWanted() ||   // the footprint instrument (vscreen_footprint.h): it reads the 2D screen's composite
         introCurveWants();            // the splash's surface strip (intro_curve.h): it acts in the eye branch, below this gate -- and panelCurveWants()
@@ -2505,10 +2473,28 @@ DrawVerdict beginPanelOverride(ID3D11DeviceContext* self, char kind, UINT count,
         }
     }
 
-    // Shape first, inline (night_vision.h): the match is pure, and the call
-    // per eye draw failed on this very test.
-    if(nightVisionShape(kind,count,instances) && nightVisionMatches(kind,count,instances))
-        return DrawVerdict::kNightVision;
+    // Phase 1 Plugin Dispatch Table (Canary: Night Vision in cockpit-visuals)
+    {
+        PluginDrawState drawState{};
+        drawState.ctx = self;
+        drawState.kind = kind;
+        drawState.count = count;
+        drawState.instances = instances;
+        drawState.args = args;
+        drawState.vsHash = bindingShaderHash(BindSlot::Vs);
+        drawState.psHash = bindingShaderHash(BindSlot::Ps);
+
+        FrameContext frameCtx{};
+        frameCtx.eyeWidth = s->eyeW;
+        frameCtx.eyeHeight = s->eyeH;
+        frameCtx.stereoActive = (s->eyeW != 0);
+        frameCtx.fssActive = (s->fssHealOn != 0);
+
+        const DrawVerdict pluginVerdict = dispatchDraw(&frameCtx, &drawState);
+        if (pluginVerdict != DrawVerdict::kNone) {
+            return pluginVerdict;
+        }
+    }
 
     // The RemLok overlay fix, after the probes so a census taken while it
     // runs still records the draw the game submitted. The shape is asked
@@ -5515,8 +5501,9 @@ void vScreenRefreshConfig() {
     backdropConfigure(cfg);
     fssPanelConfigure(cfg);
     fssRevealConfigure(cfg);
-    fssDumpConfigure(cfg);
     resolveBindConfigure(cfg);
+    coreFrameConfigure(cfg);
+    PluginRegistry::get().configure(cfg);
     // advanced.eye_origin_readers: the engine-side fix design doc's
     // (docs/design-transition-flash-engine-fix-2026-09-23.md) parts A2/B (who
     // reads the pose, and the positioner swap). Off leaves this line as
@@ -6774,8 +6761,12 @@ void installVScreenFixes(ID3D11Device* device, HookMode mode) {
     backdropConfigure(cfg);
     fssPanelConfigure(cfg);
     fssRevealConfigure(cfg);
-    fssDumpConfigure(cfg);
     resolveBindConfigure(cfg);
+    registerCockpitVisualsPlugin();
+    sortDispatchTable();
+    PluginRegistry::get().initialize(L"edvr_install_receipt.json");
+    coreFrameConfigure(cfg);
+    PluginRegistry::get().configure(cfg);
     // advanced.eye_origin_readers: the same design doc's parts A2/B. See
     // the other call site's comment above.
     poseReaderWatchConfigure(cfg);

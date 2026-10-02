@@ -173,6 +173,7 @@ REM The guard tools\run_jobs.py holds every rig to (no window, no console, no
 REM move of the keyboard focus); its own self-test, run below with the rigs,
 REM starts it on real processes, so this one fails first and fast.
 python tools\focus_watch.py --self-test || exit /b 1
+python tools\verdict_replay_test\mutants.py --self-test || exit /b 1
 
 REM The version baked into both DLLs, printed in the second line of every log.
 REM
@@ -495,6 +496,9 @@ cl.exe %CFLAGS% %NGXFLAGS% %FSRFLAGS% /Fo"%OBJ%\d3d11"\ ^
     "src\common\hotkey.cpp" "src\common\proxy.cpp" ^
     "src\common\frame_flag.cpp" ^
     "src\common\iat_hook.cpp" "src\common\iniedit.cpp" ^
+    "src\common\install_receipt.cpp" "src\common\plugin_registry.cpp" ^
+    "src\d3d11\draw_dispatch.cpp" "src\d3d11\frame_services.cpp" ^
+    "src\plugins\cockpit_visuals\cockpit_visuals_plugin.cpp" ^
     "src\d3d11\input_gate.cpp" "src\d3d11\menu.cpp" ^
     "src\d3d11\oculus_route.cpp" ^
     "src\d3d11\menu_keys.cpp" ^
@@ -1754,6 +1758,24 @@ cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
     /link /INCREMENTAL:NO d3d11.lib d3dcompiler.lib user32.lib version.lib
 if errorlevel 1 ( echo [edvr] ERROR: resolve bind test build failed & exit /b 1 )
 "%OBJ%\resolvebind\resolve_bind_test.exe" || exit /b 1
+exit /b 0
+
+:rig_verdict_replay_test
+echo [edvr] === verdict replay test ===
+if not exist "%OBJ%\verdict_replay" mkdir "%OBJ%\verdict_replay"
+cl.exe /nologo /O2 /MT /std:c++17 /EHsc /W4 ^
+    /DWIN32_LEAN_AND_MEAN /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS ^
+    /Fo"%OBJ%\verdict_replay\\" /Fe"%BUILD%\verdict_replay_test.exe" ^
+    "tools\verdict_replay_test\verdict_replay_test.cpp" ^
+    "src\d3d11\draw_dispatch.cpp" ^
+    "src\common\plugin_registry.cpp" ^
+    "src\common\install_receipt.cpp" ^
+    "src\common\log.cpp" ^
+    "src\common\config.cpp" ^
+    /link /INCREMENTAL:NO user32.lib version.lib
+if errorlevel 1 ( echo [edvr] ERROR: verdict replay test build failed & exit /b 1 )
+"%BUILD%\verdict_replay_test.exe" --self-test || exit /b 1
+python "tools\verdict_replay_test\mutants.py" --self-test || exit /b 1
 exit /b 0
 
 :rig_object_classification
