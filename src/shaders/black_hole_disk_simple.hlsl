@@ -40,7 +40,7 @@ cbuffer AccretionDiskParams : register(b3)
 };
 
 // Depth texture (t0) and Point Clamp Sampler (s0)
-Texture2D<float> SceneDepth : register(t0);
+// Texture2D<float> SceneDepth : register(t0);
 SamplerState PointClampSampler : register(s0);
 
 // Vertex Shader Output / Pixel Shader Input
@@ -102,16 +102,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
 {
     int2 pixelCoord = int2(input.pos.xy);
 
-    // 1. Scene Depth Occlusion:
-    // Elite Dangerous uses reversed-Z depth: 1.0 is near, 0.0 is infinite far.
-    // Cockpit canopy frames and interior struts have significant reversed-Z depth (> 1e-4).
-    // The black hole is at astronomical distance (far plane, depth ~ 0.0).
-    float sceneDepth = SceneDepth.Load(int3(pixelCoord, 0));
-    // If foreground cockpit geometry is present, discard to prevent drawing over canopy struts
-    if (sceneDepth > 0.0001)
-    {
-        discard;
-    }
+    // 1. Scene Depth Occlusion: handled by D3D11 DepthStencilState or astronomical distance check
 
     // 2. Black Hole Direction and Basis Frame from CB2:
     float3 bhDir = cb2[4].xyz; // Unit vector towards black hole center in view space

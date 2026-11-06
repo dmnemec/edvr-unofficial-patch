@@ -3633,6 +3633,9 @@ HRESULT STDMETHODCALLTYPE hookedMap(ID3D11DeviceContext* self, ID3D11Resource* r
     if (mapData0 && type != D3D11_MAP_READ && celestialMotionAnyWatched()) {
         celestialMotionConstantsMapped(res, mapped->pData);
     }
+    if (mapData0 && type != D3D11_MAP_READ && blackHoleDiskWanted()) {
+        blackHoleDiskCbMapped(res, mapped->pData);
+    }
     // Only the one buffer we care about, so this is a pointer compare on a very
     // hot path and nothing more.
     if (mapSub0 && res == s->compositeCb) {
@@ -3752,6 +3755,7 @@ void STDMETHODCALLTYPE hookedUnmap(ID3D11DeviceContext* self, ID3D11Resource* re
     // The planet-patch shadow reads the write BEFORE the real Unmap, like every tee here: after it the memory is
     // no longer ours to look at.
     if (celestialMotionAnyWatched()) celestialMotionConstantsUnmapped(res);
+    if (blackHoleDiskWanted()) blackHoleDiskCbUnmapped(res);
     // The census CB watch reads the write BEFORE the real Unmap, exactly as
     // the tees below do and for the same reason: after it, the memory is no
     // longer ours to look at.
@@ -5218,6 +5222,7 @@ void STDMETHODCALLTYPE hookedUpdateSubresource(ID3D11DeviceContext* self,
         if(box && box->right>=box->left)motionResourceWritten(dst,box->left,box->right);
         else motionResourceWritten(dst);
         if (celestialMotionAnyWatched()) celestialMotionConstantsWritten(dst, data, box);
+        if (blackHoleDiskWanted() && dstSub == 0) blackHoleDiskCbUpdated(dst, data, box ? (box->right - box->left) : 0);
         // F47 (TEMPORARY, the marker probe): a shadowed marker composite b0 written by UpdateSubresource (two loads while off).
         if (nativeOnFootMarkerProbeLive() && dstSub == 0)
             nativeOnFootMarkerProbeUpdate(dst, data, box != nullptr, box ? box->left : 0, box ? box->right : 0);

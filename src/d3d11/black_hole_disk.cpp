@@ -41,7 +41,6 @@ ComPtr<ID3D11VertexShader> g_vsSimple;
 ComPtr<ID3D11PixelShader>  g_psSimple;
 ComPtr<ID3D11Buffer>       g_cb2Patch;
 ComPtr<ID3D11Buffer>       g_cbParams;
-ComPtr<ID3D11Buffer>       g_cb2Stage;
 ComPtr<ID3D11BlendState>   g_blendState;
 ComPtr<ID3D11DepthStencilState> g_depthStencilState;
 ComPtr<ID3D11RasterizerState>   g_rasterizerState;
@@ -49,6 +48,12 @@ ComPtr<ID3D11SamplerState> g_pointSampler;
 
 bool g_resourcesReady = false;
 bool g_resourceFailedNoted = false;
+
+// Constant buffer CPU-side shadow (144 bytes, zero PCIe readback stall)
+void* g_watchedCbResource = nullptr;
+void* g_mappedCbPointer = nullptr;
+float g_cb2Shadow[9][4] = {};
+bool  g_cb2ShadowValid = false;
 
 struct AccretionDiskParams {
     float diskParams0[4]; // r_shadow (5.2), r_photon (3.0), r_isco (6.0), r_out (25.0)
@@ -182,13 +187,6 @@ bool ensurePipelineResources(ID3D11DeviceContext* ctx) {
     }
 
     // Staging read buffer for game CB2
-    if (!g_cb2Stage) {
-        D3D11_BUFFER_DESC bd{};
-        bd.ByteWidth = 144;
-        bd.Usage = D3D11_USAGE_STAGING;
-        bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        if (FAILED(dev->CreateBuffer(&bd, nullptr, &g_cb2Stage))) return false;
-    }
 
     // cbParams buffer: sizeof(AccretionDiskParams) = 64 bytes
     if (!g_cbParams) {
@@ -261,6 +259,28 @@ bool ensurePipelineResources(ID3D11DeviceContext* ctx) {
 
 }  // namespace
 
+void blackHoleDiskCbMapped(void* resource, void* data) {
+    if (resource == g_watchedCbResource) {
+        g_mappedCbPointer = data;
+    }
+}
+
+void blackHoleDiskCbUnmapped(void* resource) {
+    if (resource == g_watchedCbResource && g_mappedCbPointer) {
+        std::memcpy(g_cb2Shadow, g_mappedCbPointer, sizeof(g_cb2Shadow));
+        g_cb2ShadowValid = true;
+        g_mappedCbPointer = nullptr;
+    }
+}
+
+void blackHoleDiskCbUpdated(void* resource, const void* data, uint32_t bytes) {
+    if (resource == g_watchedCbResource && data) {
+        const uint32_t n = (bytes > 0 && bytes < sizeof(g_cb2Shadow)) ? bytes : sizeof(g_cb2Shadow);
+        std::memcpy(g_cb2Shadow, data, n);
+        g_cb2ShadowValid = true;
+    }
+}
+
 void blackHoleDiskFrameBoundary(ID3D11DeviceContext* ctx) {
     Config& cfg = Config::get();
     const uint32_t generation = cfg.generation();
@@ -306,19 +326,20 @@ void blackHoleDiskAfterDraw(ID3D11DeviceContext* ctx, uint64_t vsHash, uint64_t 
         return;
     }
 
-    // Copy game CB2 to our staging buffer to inspect and unroll visor roll
-    const D3D11_BOX box{0, 0, 0, 144, 1, 1};
-    ctx->CopySubresourceRegion(g_cb2Stage.Get(), 0, 0, 0, 0, saved.psCb2, 0, &box);
-
-    D3D11_MAPPED_SUBRESOURCE mappedStage{};
-    if (FAILED(ctx->Map(g_cb2Stage.Get(), 0, D3D11_MAP_READ, 0, &mappedStage)) || !mappedStage.pData) {
-        saved.restore(ctx);
-        return;
-    }
+    // Register this buffer as the watched resource for Map/Unmap and UpdateSubresource tees
+    g_watchedCbResource = saved.psCb2;
 
     float cb2Data[9][4];
-    std::memcpy(cb2Data, mappedStage.pData, sizeof(cb2Data));
-    ctx->Unmap(g_cb2Stage.Get(), 0);
+    if (g_cb2ShadowValid) {
+        std::memcpy(cb2Data, g_cb2Shadow, sizeof(cb2Data));
+    } else {
+        // Fallback if not yet captured by shadow: default forward orientation
+        std::memset(cb2Data, 0, sizeof(cb2Data));
+        cb2Data[4][2] = 1.0f; cb2Data[4][3] = 1000.0f; // Dir +Z, dist 1000 LS
+        cb2Data[5][0] = 1.0f;                          // Right +X
+        cb2Data[6][1] = 1.0f;                          // Up +Y
+        cb2Data[7][2] = 1.0f;                          // Fwd +Z
+    }
 
     // Decouple visor roll from the body basis:
     // cb2[4] = Direction xyz, distance w
@@ -368,13 +389,15 @@ void blackHoleDiskShutdown() {
     g_psSimple.Reset();
     g_cb2Patch.Reset();
     g_cbParams.Reset();
-    g_cb2Stage.Reset();
-    g_blendState.Reset();
+        g_blendState.Reset();
     g_depthStencilState.Reset();
     g_rasterizerState.Reset();
     g_pointSampler.Reset();
     g_resourcesReady = false;
     g_device = nullptr;
+    g_watchedCbResource = nullptr;
+    g_mappedCbPointer = nullptr;
+    g_cb2ShadowValid = false;
 }
 
 }  // namespace edvr

@@ -30,6 +30,11 @@ void blackHoleDiskFrameBoundary(ID3D11DeviceContext* ctx);
 // and executes the unrolled accretion disk pass into the active eye HDR target.
 void blackHoleDiskAfterDraw(ID3D11DeviceContext* ctx, uint64_t vsHash, uint64_t psHash);
 
+// Shadow update hooks from vscreen.cpp (called on Map/Unmap and UpdateSubresource)
+void blackHoleDiskCbMapped(void* resource, void* data);
+void blackHoleDiskCbUnmapped(void* resource);
+void blackHoleDiskCbUpdated(void* resource, const void* data, uint32_t bytes);
+
 // Shutdown / cleanup.
 void blackHoleDiskShutdown();
 
