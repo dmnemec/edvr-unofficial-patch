@@ -1,41 +1,36 @@
-# Black hole accretion disks (`visual.black_hole_disk`, 2026-11-04)
+# Black hole accretion disks (isual.black_hole_disk, 2026-11-04)
 
 ## Status
 
-- **State: FLIGHT 2 CAPTURED & CORRELATED (12 CENSUSES, C1 CLEAN BASELINE vs
-  C2..C12 HIP 34707 B); LENS SHADERS & VISOR ROLL ISOLATED.**
+- **State: LENS PIPELINE & CONSTANT BUFFER ISOLATED (CB2 DECODED, 2026-11-05);
+  ENTERING ACCRETION DISK DESIGN.**
 - **Goal:** Add visually striking, scientifically grounded black hole accretion
   disks (lensed upper/lower arches, central event-horizon shadow, photon ring,
   and relativistic Doppler beaming) to both the **VR** and **Flat** profiles.
-- **Proposed setting:** isual.black_hole_disk = off | simple | realistic (off the default, stock, runs nothing), live, exposed on [visual] in edvr.ini / edvr-flat.ini:
+- **Proposed setting:** visual.black_hole_disk = off | simple | realistic (off the default, stock, runs nothing), live, exposed on [visual] in edvr.ini / edvr-flat.ini:
   - off: stock game (bare gravitational lens, no accretion disk). One relaxed
     atomic load on draw path.
   - simple: predetermined EHT / Gargantua look, fast analytic shader per frame.
-ealistic: system-entry pre-computation (StartJump/FSDJump/Scan) deriving spin,
-mass, temperature, Doppler beaming and 2D geodesic LUT.
+  - realistic: system-entry pre-computation (StartJump/FSDJump/Scan) deriving
+    spin,
+    mass, temperature, Doppler beaming and 2D geodesic LUT.
 - **Ruled out:**
-uled out: a black hole reaching the star-glow pass through the solar draw list
-(docs/star-glow-2026-10-22.md).
-uled out: supercruise gravitational lensing sampling the post-opaque eye HDR
-snapshot copy (DCC S).
-uled out: vh=7F894EB5B6BA82A1 (n=3072) and vh=9BFC7FD232328391 (n=1800) being
-frustum-culled forward-only black hole meshes, because both fire 1/eye/frame
-regardless of camera heading.
-- **Key findings (Flight 2):**
-  - **Lens Draw Isolated:** Diffing C1 (non-BH system) vs C2..C12 isolates the
-    exact lens mesh at draw #386 in C7 ( h=662ACF4E126EFFD1
-    ph=2B156A05E98F2D5D,
-=3840 i=1, l=12,2,1/2,2,1), sampling s0=tex 16x512 fmt=80 (deflection profile
-LUT), alongside billboard quads 5453D19B and A2C2D551.
-  - **Visor Roll Root Cause:** At close range (< 30 km), the user noted the
-    lens effect rotates with the visor just like unpatched cockpit smoke. This
-    confirms the lens is drawn as a camera-basis billboard/quad rather than a
-    3D world mesh, suffering from the same head-roll artifact as unpatched
-    particle billboards (docs/particle-billboards.md).
-- **Next flight / step:** Dump shader bytecode / constant buffers for
-  h=662ACF4E126EFFD1 and  h=5453D19B6D362364 to verify the vertex basis and
-  anchor point for the accretion disk hook.
-
+  - ruled out: a black hole reaching the star-glow pass through the solar draw
+    list (docs/star-glow-2026-10-22.md).
+  - ruled out: supercruise gravitational lensing sampling the post-opaque eye
+    HDR snapshot copy (DCC S).
+  - ruled out: vh=662ACF4E and vh=5453D19B being the primary lens (they are
+    radar contact/stalk markers).
+- **Key findings (Flight 4 & DXBC Analysis):**
+  - **True Gravitational Lens:** Identified at vs=41E245D488BFE83E,
+    ps=6EF82262EB12A037, reading scene depth t0 and skybox t1/t2.
+  - **Constant Buffer Decoded:** CB2 (144 bytes, h=9692D4A04F893284) provides
+    exact 3D direction vector and distance (cb2[4]), and orthonormal
+    camera-space basis frame (cb2[5..7]).
+  - **Visor Roll Defect:** Caused by view-space basis quad construction tilting
+    with HMD head roll at close distances.
+- **Next step:** Accretion disk injection pass architecture, shader design, and
+  coordinate frame un-rolling.
 ---
 
 ## 1. What the engine draws today, and why `star_glow` missed it
@@ -337,3 +332,44 @@ exact 14 shaders present only when a black hole is in the system:
      using the cockpit/head camera basis rather than world coordinates,
      suffering from the exact same head-roll artifact as unpatched particle
      billboards (`docs/particle-billboards.md`).
+
+
+
+## 6. Flight 4 results: Constant Buffer (CB2) Decoded (`41E245D488BFE83E`, 2026-11-05)
+
+Log: `edvr_gfx_20261105_233701.log` (2 censuses, `census_cb_watch =
+41E245D488BFE83E`, `census_cb_slot = 2`).
+
+### 6.1 Decoded Black Hole Lens Constant Buffer (`CB2`)
+
+The GPU readback captured the exact 144-byte pixel-shader constant block `CB2`
+(`h=9692D4A04F893284`):
+
+| Register | Values (`x, y, z, w`) | Interpretation |
+|---|---|---|
+| `cb2[0]` | `0.798719, 0.691701, 4.048700, 0.000000` | Lens optic parameters / base tint |
+| `cb2[1]` | `0.798719, 0.691701, 4.048700, 0.134957` | Lensing wavelength dispersion / falloff exponent |
+| `cb2[2]` | `0.150000, 0.163000, 48.670700, 0.368000` | Output color scaling and saturation terms |
+| `cb2[3]` | `1.558000, 0.400000, 10.000000, 0.000000` | Deflection scale (`x=1.558`), noise phase (`y=0.40`), falloff power (`z=10.0`) |
+| `cb2[4]` | `0.236350, 0.056610, 0.970018, 5765.3800` | **Black Hole 3D Unit Direction (`x, y, z`) and Distance (`w = 5,765.38 LS`)** |
+| `cb2[5]` | `-0.971576, 0.000000, 0.236729, 0.000000` | **Body-aligned Right Basis Vector** (orthonormal, length 1.0) |
+| `cb2[6]` | `0.013401, -0.998396, 0.055001, 0.000000` | **Body-aligned Up Basis Vector** (orthonormal, length 1.0) |
+| `cb2[7]` | `0.236350, 0.056610, 0.970018, 1.000000` | **Body-aligned Forward Basis Vector** (identical to direction, length 1.0) |
+| `cb2[8]` | `1.000000, 1.000000, 1.000000, 0.000000` | Occlusion mask / visibility flags |
+
+### 6.2 Architectural Significance
+
+1. **Exact 3D Coordinates Available Per-Frame:**
+   - Frontier delivers the exact 3D camera-to-body direction unit vector
+     (`cb2[4].xyz`) and distance in light-seconds (`cb2[4].w = 5765.38`)
+     directly to the lens shader in CB2.
+2. **Complete 3D Orthonormal Orientation:**
+   - Rows `cb2[5..7]` provide the complete 3D orientation frame (`Right`, `Up`,
+     `Forward`) in world/camera space.
+3. **Accretion Disk Integration:**
+   - Because the 3D position and orientation are already packed into CB2, the
+     accretion disk shader pass can directly sample CB2 (or hook
+     `41E245D488BFE83E`) to construct geometrically perfect, world-locked
+     relativistic arches, event horizon shadows, and Doppler beaming without
+     guessing the body position or needing extra hooks!
+
