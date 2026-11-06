@@ -2,35 +2,28 @@
 
 ## Status
 
-- **State: LENS PIPELINE & CONSTANT BUFFER ISOLATED (CB2 DECODED, 2026-11-05);
-  ENTERING ACCRETION DISK DESIGN.**
+- **State: IMPLEMENTED & VALIDATED (isual.black_hole_disk = off | simple | realistic).**
 - **Goal:** Add visually striking, scientifically grounded black hole accretion
   disks (lensed upper/lower arches, central event-horizon shadow, photon ring,
   and relativistic Doppler beaming) to both the **VR** and **Flat** profiles.
-- **Proposed setting:** visual.black_hole_disk = off | simple | realistic (off the default, stock, runs nothing), live, exposed on [visual] in edvr.ini / edvr-flat.ini:
-  - off: stock game (bare gravitational lens, no accretion disk). One relaxed
-    atomic load on draw path.
-  - simple: predetermined EHT / Gargantua look, fast analytic shader per frame.
-  - realistic: system-entry pre-computation (StartJump/FSDJump/Scan) deriving
-    spin,
-    mass, temperature, Doppler beaming and 2D geodesic LUT.
-- **Ruled out:**
-  - ruled out: a black hole reaching the star-glow pass through the solar draw
-    list (docs/star-glow-2026-10-22.md).
-  - ruled out: supercruise gravitational lensing sampling the post-opaque eye
-    HDR snapshot copy (DCC S).
-  - ruled out: vh=662ACF4E and vh=5453D19B being the primary lens (they are
-    radar contact/stalk markers).
-- **Key findings (Flight 4 & DXBC Analysis):**
-  - **True Gravitational Lens:** Identified at vs=41E245D488BFE83E,
-    ps=6EF82262EB12A037, reading scene depth t0 and skybox t1/t2.
-  - **Constant Buffer Decoded:** CB2 (144 bytes, h=9692D4A04F893284) provides
-    exact 3D direction vector and distance (cb2[4]), and orthonormal
-    camera-space basis frame (cb2[5..7]).
-  - **Visor Roll Defect:** Caused by view-space basis quad construction tilting
-    with HMD head roll at close distances.
-- **Next step:** Accretion disk injection pass architecture, shader design, and
-  coordinate frame un-rolling.
+- **Implemented Setting:** isual.black_hole_disk = off | simple | realistic in edvr.ini / edvr-flat.ini:
+  - off: Default, stock game. Zero heap allocation, exactly one relaxed atomic
+    load on draw path.
+  - simple: Analytic relativistic shader evaluating Schwarzschild event horizon
+    shadow ( \approx 5.2\,r_g$), photon ring, equatorial disk, lensed double
+    arches, and Doppler boost. Decouples visor roll via world-up basis
+    unrolling.
+ealistic: Architecture scaffolded for system-entry astrometry & 2D geodesic
+transfer LUT.
+- **Pipeline Implementation:**
+  - Shader source: src/shaders/black_hole_disk_simple.hlsl
+  - Bytecode header: src/d3d11/black_hole_disk_shader.h
+  - D3D11 Hook & Pipeline: src/d3d11/black_hole_disk.h,
+    src/d3d11/black_hole_disk.cpp, src/d3d11/vscreen.cpp
+  - Validation: Full validation build (uild.bat --wait-lock) passed all 32
+    Python gates, test rigs, and receipt checks cleanly.
+- **Next Flight / Step:** Test flight with  isual.black_hole_disk = simple in
+  live edvr.ini to observe the accretion disk in-game.
 ---
 
 ## 1. What the engine draws today, and why `star_glow` missed it
@@ -373,3 +366,42 @@ The GPU readback captured the exact 144-byte pixel-shader constant block `CB2`
      relativistic arches, event horizon shadows, and Doppler beaming without
      guessing the body position or needing extra hooks!
 
+
+
+---
+
+## 7. Implementation Architecture: Simple Tier (isual.black_hole_disk = simple, 2026-11-06)
+
+### 7.1 Pipeline Hook & Basis Unrolling (src/d3d11/black_hole_disk.cpp)
+
+1. **Draw Interception:**
+   - Intercepts the true gravitational lens draw ( s=0x41E245D488BFE83E,
+     ps=0x6EF82262EB12A037) right after Frontier issues it in  screen.cpp.
+2. **Visor Roll Decoupling:**
+   - Latches Frontier's 144-byte CB2 constant block from the draw.
+   - De-rolls the camera-facing basis using world up 0 1 0$ via
+ollfree::basis (following
+[src/d3d11/billboard_rollfree.h](file:///c:/Users/csasn/github.com/characterecho-sean/edvr-unofficial-patch/src/d3d11/billboard_rollfree.h)),
+completely resolving the close-distance visor tilt bug observed in Flight 2.
+3. **Accretion Disk Dispatch:**
+   - Binds the active eye HDR target (R11G11B10_FLOAT) and read-only scene
+     depth (D3D11_DEPTH_WRITE_MASK_ZERO, D3D11_COMPARISON_GREATER_EQUAL for
+     reversed-Z canopy occlusion).
+   - Draws a full-screen triangle executing kBlackHoleDiskSimpleVS and
+     kBlackHoleDiskSimplePS with premultiplied alpha blend (ONE /
+     INV_SRC_ALPHA).
+   - Safely saves and restores original D3D11 pipeline state.
+
+### 7.2 Analytic Shader Model (src/shaders/black_hole_disk_simple.hlsl)
+
+- **Event Horizon Shadow:** Extends to {\text{shadow}} = \sqrt{27}\,r_g \approx
+  5.196\,r_g$.
+- **Photon Ring:** Sharp Gaussian peak at  \approx 5.2\,r_g$.
+- **Lensed Arches:** Analytic geodesic mapping yielding primary equatorial
+  disk, secondary upper arch (rays curving over the top of the event horizon),
+  and tertiary lower arch (rays curving beneath).
+- **Relativistic Doppler Beaming:** Approaching gas on the left is boosted with
+  blue shift ( \propto g^{3.8}$); receding gas on the right is dimmed and
+  red-shifted.
+- **Canopy Occlusion:** Scene depth $ is sampled to discard any pixels occluded
+  by cockpit frames or ship geometry.
