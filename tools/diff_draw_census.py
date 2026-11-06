@@ -63,7 +63,7 @@ KIND_LABEL = {'DC': 'DC eye', 'DCO': 'DCO offscreen'}
 # census in each format; a field that changes MEANING still has to fail
 # here, but a field that is merely NEW must not cost a session again.
 BEGIN_RE = re.compile(r'^DC begin census=(\d+) frames=(\d+) frame=(\d+)'
-                      r'(?: \S+=\S+)*$')
+                      r'(?: \S+=\S*)*$')
 # The IA/VS tail is optional: the DLL leaves it off when its probe faulted or
 # its budget is spent, and censuses captured before the tail existed have none
 # at all. Both must keep parsing -- a tool that rejects an old log cannot read
@@ -518,7 +518,7 @@ def self_test():
     # log parsed as zero censuses, and this self-test stayed green because
     # every line in it was the OLD format. Both vintages must parse, from one
     # test, forever.
-    b = ['DC begin census=2 frames=3 frame=2000 offscreen=yes']
+    b = ['DC begin census=2 frames=3 frame=2000 offscreen=yes capture_id=']
     for f in range(3):
         b += [# vt= (the VS resource window, 2026-09-07) sits between ph= and
               # vp=, and is on the scene draw because that is the draw whose

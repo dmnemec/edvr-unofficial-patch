@@ -2,7 +2,8 @@
 
 ## Status
 
-- **State: DESIGN AND CENSUS PLAN, NOT BUILT.**
+- **State: FIRST FLIGHT CAPTURED (HIP 34707 B, 7 CENSUSES); ISOLATING LENS vs.
+  COCKPIT.**
 - **Goal:** Add visually striking, scientifically grounded black hole accretion
   disks (lensed upper/lower arches, central event-horizon shadow, photon ring,
   and relativistic Doppler beaming) to both the **VR** and **Flat** profiles.
@@ -26,20 +27,33 @@
     companion O star, and hold no shader pair absent from every other census of
     the three logs: it renders through shared passes
     (docs/star-glow-2026-10-22.md).`
+  - `ruled out: supercruise gravitational lensing sampling the post-opaque eye
+    HDR snapshot copy (DCC S 0000022904D04CE0 -> 0000022904D04FA0), because in
+    C3-C7 (supercruise at HIP 34707 B) zero draws or dispatches bind the
+    snapshot clone; only the nearby NPC ship's thruster heat-refraction draw
+    (vh=BBAD1CA808E1E292 ph=E54F2A902E5631F6) samples it in normal space C1-C2.`
+  - `ruled out: vh=7F894EB5B6BA82A1 ph=095030F27D2C362A (n=3072) and
+    vh=9BFC7FD232328391 ph=CB7AF179DF4E6A60 (n=1800) being frustum-culled
+    forward-only black hole meshes, because both fire 1/eye/frame across both
+    facing (C1, C4, C5) and 180-degree-away (C2, C3, C6, C7) captures.`
 - **Open hypotheses:**
-  - **H1 (frustum-culled lens draw):** The black hole's gravitational lens is
-    drawn by a frustum-culled sphere or billboard draw into the scene target or
-    post-bloom distortion chain using a shared `(VS, PS)` pair. Comparing a draw
-    census taken facing the black hole against a draw census taken facing 180
-    degrees away in the same spot will isolate the exact draw call.
-  - **H2 (constant-buffer pose):** Like stars (`0EE43D81`/`4D516EF0`, VS `b0`
-    rows 9-11 `.w` for camera-relative centre and `b2[0].w` for radius) and
-    planets (`72BDD292`, `celestial_motion.h`), the black hole's lens draw
-    carries its camera-relative centre and scale in `VS b0` / `VS b2`.
-- **Next flight:** One black-hole discovery capture (can piggyback on the MFD
-  test flight): two back-to-back draw censuses near a black hole — Census A
-  looking directly at the black hole, Census B looking 180 degrees away at
-  empty sky.
+  - **H1 (full-sphere or post-FX lens):** Because every non-indexed sky/HDR
+    draw
+    in supercruise (`8471F654`/`B00B8B6F`, `9BFC7FD2`/`CB7AF179`,
+    `C7FA0C0F`/`8AB5A6B2`, `359BF8FF`/`92FF8499`, `2D78DC3F`/`D0A16B9E`, and
+    compute `5998146D`/`EB0245DE`) runs 1/eye/frame regardless of camera heading,
+    the black hole's lens is either evaluated inside an all-sky/fullscreen pass
+    using a directional vector in its constant buffer, or is one of the
+    frustum-culled Group A draws (`76ED1E4F`/`7ECF7C83`, `88DCF116`/`494506A6`)
+    that dropped to zero in C7.
+  - **H2 (constant-buffer direction/pose):** Dumping the constant buffers (`c=`
+    and `cb=`) and shader bytecode for those exact candidates (or running
+    `census_skip` in any non-black-hole system) will immediately separate
+    cockpit/ship draws from the black hole lens and reveal the body-direction
+    vector.
+- **Next step:** No black-hole flight needed to prune the list — we can check
+  which of these hashes appear in any ordinary non-black-hole scene or dump
+  their constant buffers / shader disassembly on the next session.
 
 ---
 
@@ -205,3 +219,87 @@ depth writes off) gives both profiles:
      treats it as sky unless `celestial_motion.h` supplies a body record or it
      is blended after the upscaler. Checking the `d=` column and depth state on
      the census line will tell us immediately.
+
+---
+
+## 4. Flight 1 results (`HIP 34707 B`, 2026-11-05)
+
+Log: `edvr_gfx_20261105_203015.log` (`v0.22.0-rc.6-204-g63967cb5`, VR profile,
+`2632x2684` per-eye target), paired with `Journal.2026-11-05T203028.01.log` at
+`HIP 34707 B` (`BodyID: 2`, `BodyType: Star`, `DistFromStarLS: 54983.46`).
+
+*(Tool fix landed alongside this analysis: `BEGIN_RE` in
+`tools/diff_draw_census.py` required `\S+=\S+` for trailing attributes on `DC
+begin` lines, which rejected the empty `capture_id=` attribute emitted when no
+eye-run capture ID is active; updated to `\S+=\S*` and pinned in
+`--self-test`.)*
+
+### 4.1 Timeline and heading of the 7 censuses
+
+| Census | Time | Frame | Mode | Ship maneuver / view reported by pilot |
+|---|---|---|---|---|
+| **C1** | `20:34:00` | `20898` | Normal Space | Facing `HIP 34707 B` at ~3,000 LS (NPC pirate `Tagom` also nearby in normal space) |
+| **C2** | `20:34:10` | `21161` | Normal Space | Flipped 180 degrees away from `HIP 34707 B` (`12s` before `StartJump` to Supercruise at `20:34:22`) |
+| **C3** | `20:34:38` | `21904` | Supercruise | Flying away toward ~6,500 LS (`11s` after entering Supercruise at `20:34:27`) |
+| **C4** | `20:35:09` | `22743` | Supercruise | Turned 180 degrees around at ~6,500 LS to face `HIP 34707 B` and fly back |
+| **C5** | `20:35:25` | `23167` | Supercruise | Approaching / flying past `HIP 34707 B` |
+| **C6** | `20:35:41` | `23574` | Supercruise | Passing / flying away from `HIP 34707 B` |
+| **C7** | `20:35:49` | `23802` | Supercruise | ~1,000 LS away, preparing to open Galaxy Map (`20:36:04`) and jump out |
+
+### 4.2 Complete eye-HDR (`2632x2684 fmt=26`) draw sequence from sky to bloom
+
+Across all 7 censuses, the left-eye HDR pass (`r=tex 2632x2684 fmt=26
+res=0000022904D04CE0`, `d=tex 2632x2684 fmt=19 res=0000022904D044A0`) after
+deferred lighting (`7E38A6AA`, `8289669D`, `0357BBB2`) and the post-opaque
+compute dispatches (`5998146D`, `EB0245DE`) executes this exact sequence:
+
+| Order | `vh` / `ch` | `ph` | Call & geometry | Counts `[C1..C7]` | Notes / role |
+|---|---|---|---|---|---|
+| 1 | `ch=5998146D464F5C0E` | `-` | `DispatchIndirect` (`u=[fmt=26, fmt=53]`) | `[6, 6, 6, 6, 6, 6, 6]` | Post-opaque compute pass 1 reading linear depth `fmt=39`, depth `fmt=19`, `tex 256x256 fmt=95`, `cb=[buf 480, buf 480]` |
+| 2 | `ch=EB0245DE0BB23BB6` | `-` | `DispatchIndirect` (`u=[fmt=26, fmt=53]`) | `[6, 6, 6, 6, 6, 6, 6]` | Post-opaque compute pass 2 (same bindings, `args+12`) |
+| 3 | `8471F654B0CBAA89` | `B00B8B6FB5CDB153` | `N n=318 i=1` (`vb=buf 6360 sd=20`) | `[6, 6, 6, 6, 6, 6, 6]` | Sky dome at `z=0.000-0.000`, `ds=17wZ`, opaque `bl=02,1,1/2,1,1`, reads `s=[tex 2048x2048 fmt=80, tex 256x256 fmt=27]` |
+| 4 | `297B6F1F7F104F23` | `06332CA168B6DA63` | `N n=12 i=13873` (`vb=buf 192 sd=16`) | `[6, 6, 6, 6, 6, 6, 6]` | Starfield (`13,873` star instances at `z=0.000-0.000`, `ds=17wZ`, additive `bl=15,2,1/5,2,1`, `c=buf 208`) |
+| 5 | `B278189EFA1D574D` | `06332CA168B6DA63` | `N n=12 i=14` (`vb=buf 192 sd=16`) | `[6, 6, 6, 6, 6, 6, 6]` | Bright system stars/bodies (`14` instances at `z=0.000-0.000`) |
+| 6 | `88DCF1164C640EC3` | `494506A63091DF8C` | `X n=48, 48, 24` (`ia=7855590, 8019642, 1476698`) | `[18, 18, 18, 18, 18, 10, 6]` | Opaque depth-writing mesh (`ds=17wA`, `c=buf 208`, instanced pool `stride=336`); the two `n=48` draws drop to `0` in C6 frame 0 and C7 (`[12, 12, 12, 12, 12, 4, 0]`) |
+| 7a | `7F894EB5B6BA82A1` | `095030F27D2C362A` | `N n=3072 i=1` (`vb=buf 49152/98304 sd=16`) | `[6, 6, 0, 0, 0, 0, 0]` | **Normal-space only** (`1/eye/frame` in C1–C2); `ds=17wZ st=10`, additive `bl=15,2,1/5,2,1`, `c=buf 208`, `s=[tex 6x1 fmt=39, tex 128x128 fmt=70]` |
+| 7b | `9BFC7FD232328391` | `CB7AF179DF4E6A60` | `N n=1800 i=1` (`vb=buf 64800 sd=36`) | `[0, 0, 6, 6, 6, 6, 6]` | **Supercruise replacement for 7a** (`1/eye/frame` in C3–C7); `ds=17wZ st=10/14`, additive `bl=12,2,1/2,2,1`, same `c=buf 208` and `s=[tex 6x1 fmt=39, tex 128x128 fmt=70]` |
+| 8 | `025B4B9FF54622ED` | `C5A5C7E8216CB9AF` | `X n=966 i=1` (`ia=1476746`) | `[6, 6, 6, 6, 6, 6, 6]` | Cockpit/canopy glass mesh (`st=14`, `stride=336`) |
+| 9 | `B43A856E285815E3` | `702C3974A260DE14` | `X n=1515, 4584, 381` | `[0, 0, 18, 18, 18, 18, 18]` | Supercruise canopy/interior pass (`st=14`, reads `tex 3072x3072 fmt=33` shadow + `tex 256x256 fmt=95` cubemap) |
+| 10 | `2BB766C168B450A2` | `4888F2B05460FA9B` | `N n=1528 i=1` (`vb=buf 24448 sd=16`, `tp=5`) | `[0, 0, 6, 42, 48, 54, 60]` | Supercruise orbit lines / gravity-well rings (`1/eye` in C3, `7/eye` in C4, `8/eye` in C5, `9/eye` in C6, `10/eye` in C7) |
+| 11 | `359BF8FF5CFAA4C3` | `92FF8499ED345759` | `X n=6 i=13` (`vb=buf 64 sd=16 ib=buf 12`) | `[0, 0, 0, 6, 6, 6, 6]` | `13` instanced quads (`1/eye/frame` in C4–C7), `c=buf 208`, reads linear depth `s=[tex 2632x2684 fmt=39]` |
+| 12 | `76ED1E4F8C72C26E` | `7ECF7C83FD5AD373` | `X n=3960, 168, 168` (`ia=7316756, 7939048, 8103100`) | `[18, 18, 18, 18, 18, 4, 0]` | Alpha-blended mesh (`ds=17wZ`, `bm=7`, `bl=15,6,1/5,6,1`, `c=buf 208`, `s=[tex 6x1 fmt=39, tex 128x128 fmt=70 x2]`); **drops in C6 and vanishes (`0`) in C7** |
+| 13 | `F512712C40D93C12` | `D0B9213C1F248335` | `X n=288 i=1` (`ia=1096924`) | `[18, 9, 6, 6, 6, 6, 6]` | Canopy glass reflection (`st=14`, dual-source blend `bl=12,16,1/2,18,1`) |
+| 14 | `DCC S` | `-` | `CopySubresourceRegion` (`fmt=26 -> fmt=26`) | `[6, 6, 6, 6, 6, 6, 6]` | Clones active eye HDR target (`0000022904D04CE0 -> 0000022904D04FA0` left, `0000022904CFCE60 -> 0000022904D01060` right) |
+| 15 | `BBAD1CA808E1E292` | `E54F2A902E5631F6` | `X n=6, 6` or `n=12, 12` (`vb=buf 228 sd=92`) | `[4, 12, 0, 0, 0, 0, 0]` | **Only consumer of the `DCC S` clone (`0000022904D04FA0`)**, and only in Normal Space (`C1–C2`, NPC ship heat plume); **absent in Supercruise (`C3–C7`)** |
+| 16 | `A47A3315FFF5E2E4` | `C67370DE72E4422C` | `N n=140 i=1` (`vb=buf 25600 sd=32`, `tp=2`) | `[0, 0, 6, 6, 6, 6, 6]` | Line list (`tp=2`, `ds=02wA st=04`, HUD/cockpit vector lines) |
+| 17 | `8C091FFD08644E02` | `4E4FF61E8A08FC7E` | `X n=12432 i=1` (`ia=1492952`) | `[6, 6, 6, 6, 6, 6, 6]` | Canopy/cockpit interior (`st=15`, `stride=336`) |
+| 18 | `C7FA0C0F5DD49180` | `8AB5A6B2E7CACFAE` | `N n=8194 i=1` (`vb=buf 131104 sd=16`, `tp=5`) | `[0, 0, 6, 6, 6, 6, 6]` | Supercruise space-dust / shell strip (`8,194` vertices, `st=11`, `so=r81/w00/f3`, also drawn into `256x256 fmt=26` probe in C3 & C5) |
+| 19 | `E508648660A352B2`.. | `5F26E558A7CA0C50`.. | HUD / cockpit holographic elements | steady | Followed by bloom pyramid (`DFED8E1C`/`143AAE05` into `1316x1342 fmt=26`) and fullscreen tonemap (`2D78DC3F`/`D0A16B9E` into `2632x2684 fmt=27`) |
+
+### 4.3 What Flight 1 proved and what remains to check
+
+1. **Supercruise lensing does NOT use the post-opaque HDR copy (`DCC S`):**
+   - In `C3–C7` (all in supercruise, where the lensing effect was ~1/3 of the
+     screen), the cloned HDR texture (`0000022904D04FA0` / `0000022904D01060`)
+     is never bound as an SRV by any draw or compute shader.
+2. **Normal space facing (`C1`) vs. 180-degrees away (`C2`) has the exact same
+   sky/eye-HDR draw list:**
+   - Every non-NPC draw in the sky and eye-HDR sequence (`8471F654`,
+     `297B6F1F`,
+     `B278189E`, `88DCF116`, `7F894EB5`, `76ED1E4F`) ran with the exact same
+     count (`1/eye/frame` or `3/eye/frame`) in both `C1` (facing at 3k LS) and
+     `C2` (flipped 180 degrees away in normal space).
+   - That means the black hole's lens is **not** a frustum-culled draw that
+     disappears in `C2`: either it is evaluated inside one of the always-on
+     full-sphere / fullscreen passes (`8471F654` sky dome, `7F894EB5` /
+     `9BFC7FD2` sphere, `5998146D` / `EB0245DE` compute, or `2D78DC3F`
+     fullscreen composite) using a direction vector in its constant buffer, OR
+     `76ED1E4F` / `88DCF116` only culled in `C6–C7`.
+3. **We do not need another black-hole trip to eliminate the cockpit/HUD
+   draws:**
+   - Because any normal flight log (in a regular star system or station) will
+     contain the ordinary cockpit, sky dome, starfield, space-dust and tonemap
+     shaders, we can compare this table against any non-black-hole census (or
+     inspect the shader bytecode of `2D78DC3F`/`D0A16B9E`, `8471F654`/`B00B8B6F`,
+     `7F894EB5`/`095030F2`, `9BFC7FD2`/`CB7AF179`, and `76ED1E4F`/`7ECF7C83`)
+     to see which shader actually computes the gravitational lens deflection!
