@@ -2,58 +2,39 @@
 
 ## Status
 
-- **State: FIRST FLIGHT CAPTURED (HIP 34707 B, 7 CENSUSES); ISOLATING LENS vs.
-  COCKPIT.**
+- **State: FLIGHT 2 CAPTURED & CORRELATED (12 CENSUSES, C1 CLEAN BASELINE vs
+  C2..C12 HIP 34707 B); LENS SHADERS & VISOR ROLL ISOLATED.**
 - **Goal:** Add visually striking, scientifically grounded black hole accretion
   disks (lensed upper/lower arches, central event-horizon shadow, photon ring,
   and relativistic Doppler beaming) to both the **VR** and **Flat** profiles.
-- **Proposed setting:** `visual.black_hole_disk = off | simple | realistic`
-  (`off` the default, stock, runs nothing), live, exposed on the `[visual]`
-  section of `edvr.ini` / `edvr-flat.ini`, the installer, the VR Visual menu
-  page, and the Flat F8 Visual tab:
-  - `off`: stock game (bare gravitational lens, no accretion disk). One relaxed
-    atomic load on the draw path; nothing created.
-  - `simple`: a predetermined EHT / Gargantua appearance for every black hole,
-    evaluated with a fast analytic shader per frame for near-zero GPU overhead.
-  - `realistic`: system-entry pre-computation (`StartJump` / `FSDJump` / `Scan`
-    plus engine draw constants) that derives mass, spin, companion-star feeding
-    versus isolated RIAF state, blackbody temperature, Doppler shift and a
-    pre-baked 2D lookup texture (LUT) on system entry so the per-frame shader
-    samples accurate relativistic optics without per-pixel geodesic integration.
+- **Proposed setting:** isual.black_hole_disk = off | simple | realistic (off the default, stock, runs nothing), live, exposed on [visual] in edvr.ini / edvr-flat.ini:
+  - off: stock game (bare gravitational lens, no accretion disk). One relaxed
+    atomic load on draw path.
+  - simple: predetermined EHT / Gargantua look, fast analytic shader per frame.
+ealistic: system-entry pre-computation (StartJump/FSDJump/Scan) deriving spin,
+mass, temperature, Doppler beaming and 2D geodesic LUT.
 - **Ruled out:**
-  - `ruled out: a black hole reaching the star-glow pass through the solar draw
-    list, because two black-hole captures (edvr_gfx_20261022_112019:5 and
-    114920:1 targeting a black hole at 2.64 Mm) decode no star but the
-    companion O star, and hold no shader pair absent from every other census of
-    the three logs: it renders through shared passes
-    (docs/star-glow-2026-10-22.md).`
-  - `ruled out: supercruise gravitational lensing sampling the post-opaque eye
-    HDR snapshot copy (DCC S 0000022904D04CE0 -> 0000022904D04FA0), because in
-    C3-C7 (supercruise at HIP 34707 B) zero draws or dispatches bind the
-    snapshot clone; only the nearby NPC ship's thruster heat-refraction draw
-    (vh=BBAD1CA808E1E292 ph=E54F2A902E5631F6) samples it in normal space C1-C2.`
-  - `ruled out: vh=7F894EB5B6BA82A1 ph=095030F27D2C362A (n=3072) and
-    vh=9BFC7FD232328391 ph=CB7AF179DF4E6A60 (n=1800) being frustum-culled
-    forward-only black hole meshes, because both fire 1/eye/frame across both
-    facing (C1, C4, C5) and 180-degree-away (C2, C3, C6, C7) captures.`
-- **Open hypotheses:**
-  - **H1 (full-sphere or post-FX lens):** Because every non-indexed sky/HDR
-    draw
-    in supercruise (`8471F654`/`B00B8B6F`, `9BFC7FD2`/`CB7AF179`,
-    `C7FA0C0F`/`8AB5A6B2`, `359BF8FF`/`92FF8499`, `2D78DC3F`/`D0A16B9E`, and
-    compute `5998146D`/`EB0245DE`) runs 1/eye/frame regardless of camera heading,
-    the black hole's lens is either evaluated inside an all-sky/fullscreen pass
-    using a directional vector in its constant buffer, or is one of the
-    frustum-culled Group A draws (`76ED1E4F`/`7ECF7C83`, `88DCF116`/`494506A6`)
-    that dropped to zero in C7.
-  - **H2 (constant-buffer direction/pose):** Dumping the constant buffers (`c=`
-    and `cb=`) and shader bytecode for those exact candidates (or running
-    `census_skip` in any non-black-hole system) will immediately separate
-    cockpit/ship draws from the black hole lens and reveal the body-direction
-    vector.
-- **Next step:** No black-hole flight needed to prune the list — we can check
-  which of these hashes appear in any ordinary non-black-hole scene or dump
-  their constant buffers / shader disassembly on the next session.
+uled out: a black hole reaching the star-glow pass through the solar draw list
+(docs/star-glow-2026-10-22.md).
+uled out: supercruise gravitational lensing sampling the post-opaque eye HDR
+snapshot copy (DCC S).
+uled out: vh=7F894EB5B6BA82A1 (n=3072) and vh=9BFC7FD232328391 (n=1800) being
+frustum-culled forward-only black hole meshes, because both fire 1/eye/frame
+regardless of camera heading.
+- **Key findings (Flight 2):**
+  - **Lens Draw Isolated:** Diffing C1 (non-BH system) vs C2..C12 isolates the
+    exact lens mesh at draw #386 in C7 ( h=662ACF4E126EFFD1
+    ph=2B156A05E98F2D5D,
+=3840 i=1, l=12,2,1/2,2,1), sampling s0=tex 16x512 fmt=80 (deflection profile
+LUT), alongside billboard quads 5453D19B and A2C2D551.
+  - **Visor Roll Root Cause:** At close range (< 30 km), the user noted the
+    lens effect rotates with the visor just like unpatched cockpit smoke. This
+    confirms the lens is drawn as a camera-basis billboard/quad rather than a
+    3D world mesh, suffering from the same head-roll artifact as unpatched
+    particle billboards (docs/particle-billboards.md).
+- **Next flight / step:** Dump shader bytecode / constant buffers for
+  h=662ACF4E126EFFD1 and  h=5453D19B6D362364 to verify the vertex basis and
+  anchor point for the accretion disk hook.
 
 ---
 
@@ -303,3 +284,56 @@ compute dispatches (`5998146D`, `EB0245DE`) executes this exact sequence:
      inspect the shader bytecode of `2D78DC3F`/`D0A16B9E`, `8471F654`/`B00B8B6F`,
      `7F894EB5`/`095030F2`, `9BFC7FD2`/`CB7AF179`, and `76ED1E4F`/`7ECF7C83`)
      to see which shader actually computes the gravitational lens deflection!
+
+## 5. Flight 2 results (HIP 34707 B 14-point distance ladder, 2026-11-05)
+
+Log: `edvr_gfx_20261105_223323.log` (12 untruncated censuses, 3 frames each,
+17.5 MB).
+
+### 5.1 Census ladder correlation
+
+| Census | Time | Range / State | Draws/frame (eye / off) | Key observations |
+|---|---|---|---|---|
+| C1 | 22:35:48 | Clean baseline (Non-BH star system) | 1244 eye / 1556 off | Sky dome uses `F8FA801F2CB1E27C`; normal celestial sphere `7F894EB5`; zero BH lens quads; zero orbit lines |
+| C2 | 22:47:28 | 54k LS facing BH (Supercruise) | 1352 eye / 1582 off | Sky dome switches to `8471F654B0CBAA89`; `9BFC7FD2` supercruise sphere active; BH lens quad cluster active |
+| C3 | 22:47:52 | 54k LS facing away (180 deg) | 1488 eye / 1820 off | Same BH lens quad cluster fires 1/eye/frame despite facing away |
+| C4 | 22:52:34 | 14k LS facing BH (Supercruise) | 1764 eye / 1629 off | Lens cluster active; orbit line count grows |
+| C5 | 22:54:19 | 6k LS facing BH (Supercruise) | 1677 eye / 1623 off | Lens cluster active |
+| C6 | 22:55:15 | 6k LS facing BH (Normal space) | 1076 eye / 1686 off | Drops to normal space; orbit lines drop to 0; supercruise sphere `9BFC7FD2` reverts to `7F894EB5`; lens cluster inactive |
+| C7 | 22:56:59 | 3k LS facing BH (Supercruise) | 1395 eye / 1642 off | Lens quad cluster fires 1/eye/frame at draws #383-#389 |
+| C8 | 22:58:21 | 3k LS facing away (180 deg) | 1736 eye / 1877 off | Lens quad cluster fires identically at draws #485-#491 |
+| C9 | 22:59:51 | 1.5k LS facing BH (Supercruise) | 1554 eye / 1627 off | Lens quad cluster active |
+| C10 | 23:02:48 | 5.5 Mm facing BH (Supercruise) | 1806 eye / 1653 off | Close approach |
+| C11 | 23:03:38 | 3.0 Mm facing BH (Supercruise) | 1476 eye / 1627 off | Lens spans large screen fraction |
+| C12 | 23:04:05 | 1.5 Mm facing BH (Supercruise) | 1464 eye / 1480 off | Lens dominates view; log cap reached shortly after |
+
+### 5.2 Identification of the Black Hole Lens Shaders
+
+Diffing C1 (clean baseline without a black hole) against C2..C12 isolates the
+exact 14 shaders present only when a black hole is in the system:
+1. **The Gravitational Lens Mesh / Quad:**
+   - Draw #386 in C7 (`vh=662ACF4E126EFFD1 ph=2B156A05E98F2D5D`): indexed
+     triangle list (`n=3840 i=1`, `vb=buf 7704 sd=12`, `ib=buf 7680`), `ds=02wA
+     st=04`, blending `bl=12,2,1/2,2,1` (`SrcBlend=D3D11_BLEND_SRC_ALPHA`,
+     `DestBlend=D3D11_BLEND_INV_SRC_ALPHA`).
+   - Samples `s0=tex 16x512 fmt=80` (`DXGI_FORMAT_R32G32_FLOAT` or
+     deflection/falloff profile LUT).
+   - Accompanied by helper quads:
+     - `vh=5453D19B6D362364 ph=289C3EA6EA3EFAF9` (`n=6 i=4`, `vb=buf 120
+       sd=20`, `bl=15,2,1/5,2,1` additive)
+     - `vh=A2C2D5510BF1926D ph=4F39912FEED610E2` (`n=6 i=4`, `vb=buf 96 sd=16`,
+       `bl=15,2,1/5,2,1` additive)
+     - `vh=9B34C331902DC1ED ph=9FDA9FAB05B654BD` (`n=108 i=1`, `vb=buf 3456
+       sd=32`)
+     - `vh=F8D8A92E96419901 ph=4F35016E001AB1CB` (`n=6 i=3`, `vb=buf 96 sd=16`,
+       samples `tex 1024x1024 fmt=98`)
+2. **The Visor / Tilt-Roll Defect:**
+   - In headset at close approach (< 30 km), the user noted: "At the Km
+     distances the entire screen is taken up by a weird lensing effect no
+     matter where I look. It rotates with the visor just like smoke used to
+     before we fixed the smoke tilt rotation."
+   - This occurs because `vh=662ACF4E126EFFD1` and its companion quads
+     (`5453D19B`, `A2C2D551`) construct camera-facing billboard/screen quads
+     using the cockpit/head camera basis rather than world coordinates,
+     suffering from the exact same head-roll artifact as unpatched particle
+     billboards (`docs/particle-billboards.md`).
