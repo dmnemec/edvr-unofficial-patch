@@ -38,6 +38,8 @@ inline bool flatProfileReadsKey(const char* key) {
         // The canopy glass (visual.cockpit_glass, cockpit_glass.h): odyssey | legacy, read live at the frame boundary, in both profiles. The Visual tab's row.
         // Unlisted, getString answers "off" here, which the reader takes for odyssey, and the row could never turn the legacy look on.
         std::strcmp(key, "visual.cockpit_glass") == 0 ||
+        // Black hole accretion disk simulation (visual.black_hole_disk, black_hole_disk.h): off | simple | realistic, in both profiles.
+        std::strcmp(key, "visual.black_hole_disk") == 0 ||
         // The smoke and steam plumes, and the other camera-facing billboards (particle_fix.cpp, docs\particle-billboards.md): steady | stock, in both
         // profiles, the Visual tab's Billboards row. Unlisted, getString answers "off" here, which the reader takes for "not stock or steady;
         // running stock", so the row could never turn the fix on.

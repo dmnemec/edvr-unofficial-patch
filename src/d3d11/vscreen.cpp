@@ -78,6 +78,7 @@
 #include "celestial_motion.h"   // the planet patch constants' CPU shadow: the write tees, the draw capture, the boundary tick
 #include "cockpit_glass_probe.h"   // TEMPORARY: the canopy draw's state and constants, for the legacy-glass port
 #include "cockpit_glass.h"         // visual.cockpit_glass: the legacy canopy shader, handed to the real PSSetShader at bind time
+#include "black_hole_disk.h"       // visual.black_hole_disk: black hole accretion disk simulation and rendering
 #include "orbital_width.h"      // fix.ui_quality: the orbit lines' half-width, scaled in the game's own draw of their shader
 #include "supercruise_bars.h"   // fix.ui_quality: the supercruise bars' private geometry-shader pass, bound around the layered issue
 #include "srv_turret.h"         // issue 140: the SRV turret view's HUD, a private geometry-shader pass bound around every issue of the HUD families' draws
@@ -5555,6 +5556,7 @@ void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext* self, UINT count, UINT st
     if (v == DrawVerdict::kPanel) endPanelOverride(self);
     if (starGlow && vrStarGlowAfterMayAct()) starGlowAfterDraw(self, 'D', count, 1, args, v);
     if (self == g_state->ownerCtx && pixelProbeLive(g_state)) pixelProbeAfterEye(g_state, self, count, 1, false);
+    if (blackHoleDiskWanted() && self == g_state->ownerCtx) blackHoleDiskAfterDraw(self, bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps));
 }
 void STDMETHODCALLTYPE hookedDrawAuto(ID3D11DeviceContext* self) {
     mapRunBeforeDraw(self);
@@ -5649,6 +5651,7 @@ void STDMETHODCALLTYPE hookedDrawIndexed(ID3D11DeviceContext* self, UINT count,
     if (v == DrawVerdict::kPanel) endPanelOverride(self);
     if (starGlow && vrStarGlowAfterMayAct()) starGlowAfterDraw(self, 'I', count, 1, args, v);
     if (self == g_state->ownerCtx && pixelProbeLive(g_state)) pixelProbeAfterEye(g_state, self, count, 1, false);
+    if (blackHoleDiskWanted() && self == g_state->ownerCtx) blackHoleDiskAfterDraw(self, bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps));
 }
 void STDMETHODCALLTYPE hookedDrawInstanced(ID3D11DeviceContext* self, UINT perInstance,
                                            UINT instances, UINT startVertex,
@@ -5750,6 +5753,7 @@ void STDMETHODCALLTYPE hookedDrawInstanced(ID3D11DeviceContext* self, UINT perIn
     if (v == DrawVerdict::kPanel) endPanelOverride(self);
     if (starGlow && vrStarGlowAfterMayAct()) starGlowAfterDraw(self, 'N', perInstance, drawn, args, v);
     if (self == g_state->ownerCtx && pixelProbeLive(g_state)) pixelProbeAfterEye(g_state, self, perInstance, drawn, false);
+    if (blackHoleDiskWanted() && self == g_state->ownerCtx) blackHoleDiskAfterDraw(self, bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps));
 }
 void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
                                                   UINT perInstance, UINT instances,
@@ -5930,6 +5934,7 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
     }
     if (starGlow && vrStarGlowAfterMayAct()) starGlowAfterDraw(self, 'X', perInstance, instances, args, v);
     if (self == g_state->ownerCtx && pixelProbeLive(g_state)) pixelProbeAfterEye(g_state, self, perInstance, instances, false);
+    if (blackHoleDiskWanted() && self == g_state->ownerCtx) blackHoleDiskAfterDraw(self, bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps));
 }
 
 // Read panel_distance_index, refusing anything that cannot be a float index.
@@ -6731,6 +6736,7 @@ EDVR_BOUNDARY_TICK(tkEngineVelocity, "engine_velocity");
 EDVR_BOUNDARY_TICK(tkCelestialMotion, "celestial_motion");
 EDVR_BOUNDARY_TICK(tkCockpitGlassProbe, "cockpit_glass_probe");
 EDVR_BOUNDARY_TICK(tkCockpitGlass, "cockpit_glass");
+EDVR_BOUNDARY_TICK(tkBlackHoleDisk, "black_hole_disk");
 EDVR_BOUNDARY_TICK(tkSharpenTick, "sharpen_tick");
 EDVR_BOUNDARY_TICK(tkTemporalTick, "temporal_tick");
 EDVR_BOUNDARY_TICK(tkTemporalBoundary, "temporal_boundary");
@@ -6822,6 +6828,8 @@ void vScreenFrameBoundary() {
         tkCockpitGlassProbe.run([&] { cockpitGlassProbeFrameBoundary(g_state->ownerCtx); });
         // visual.cockpit_glass (cockpit_glass.h): the key (live) and, while it is legacy, the 30 s window line. Odyssey, a generation compare.
         tkCockpitGlass.run([&] { cockpitGlassFrameBoundary(g_state->ownerCtx); });
+        // visual.black_hole_disk (black_hole_disk.h): live key check and resource lifecycle.
+        tkBlackHoleDisk.run([&] { blackHoleDiskFrameBoundary(g_state->ownerCtx); });
         // The sharpening's warm compile and missing-hook note, once a frame,
         // unconditionally -- not nested under any other feature's gate.
         tkSharpenTick.run([&] { sharpenPassTick(g_state->ownerCtx); });
