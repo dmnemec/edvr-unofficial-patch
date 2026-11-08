@@ -3509,6 +3509,7 @@ void STDMETHODCALLTYPE hookedExecuteCommandList(ID3D11DeviceContext* self,
         graphicsBridgeNoteUnknownExecution();
         motionResourceWritten(nullptr);
         if (celestialMotionAnyWatched()) celestialMotionConstantsUnknownWrite(nullptr);
+        if (blackHoleDiskWanted()) blackHoleDiskBufferInvalidated(nullptr);
     }
     s->realExecuteCommandList(self, list, restoreContextState);
     // After the call, and only when the context was not restored: with
@@ -4968,7 +4969,7 @@ void STDMETHODCALLTYPE hookedCopyResource(ID3D11DeviceContext* self,
     uiAtlasNoteWrite(dst, 2);
     if (g_vrWorldWatchWrites && !foreignContext(self)) vrWorldRouteNoteWrite(dst);   // a write into H after the resolve is the latch's
     if(foreignContext(self))engineVelocityResourceUnknown(dst);
-    if (!foreignContext(self)) {motionResourceWritten(dst);if(nativeOnFootMarkerProbeLive())nativeOnFootCb1Copied(dst);if(celestialMotionAnyWatched())celestialMotionConstantsUnknownWrite(dst);if(fssResActive())fssResNoteCopyMaybeMismatched(dst,src);if(uiLayerWatching())uiLayerNoteCopy(dst,src);}
+    if (!foreignContext(self)) {motionResourceWritten(dst);if(nativeOnFootMarkerProbeLive())nativeOnFootCb1Copied(dst);if(celestialMotionAnyWatched())celestialMotionConstantsUnknownWrite(dst);if(blackHoleDiskWanted())blackHoleDiskBufferInvalidated(dst);if(fssResActive())fssResNoteCopyMaybeMismatched(dst,src);if(uiLayerWatching())uiLayerNoteCopy(dst,src);}
     if (!foreignContext(self) && flatRuntimeActive()) {
         flatRuntimeSubstitution(self, FlatSubstEvent::kCopy);
         flatRuntimeOverlayResourceMutation(dst, FlatOverlayMutationOp::CopyResource,
@@ -5178,6 +5179,7 @@ void STDMETHODCALLTYPE hookedCopySubresourceRegion(
         else motionResourceWritten(dst);
         if (nativeOnFootMarkerProbeLive()) nativeOnFootCb1Copied(dst);   // F152
         if (celestialMotionAnyWatched()) celestialMotionConstantsUnknownWrite(dst);
+        if (blackHoleDiskWanted()) blackHoleDiskBufferInvalidated(dst);
         if (fssResActive()) fssResNoteCopyMaybeMismatched(dst, src);
         if (uiLayerWatching()) uiLayerNoteCopy(dst, src);
     }
@@ -5516,6 +5518,7 @@ void STDMETHODCALLTYPE hookedDraw(ID3D11DeviceContext* self, UINT count, UINT st
         // visual.cockpit_glass = legacy (cockpit_glass.h): over the game's ice or condensation canopy draw, the legacy dirt, drawn again with EDVR's overlay; one relaxed load otherwise
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDraw(self, count, start); cockpitGlassOverlayEnd(self); }
         if (!stationSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDraw(self, count, start); });
+        if (blackHoleDiskWanted() && self == g_state->ownerCtx) blackHoleDiskAfterDraw(self, bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps));
         return;
     }
     if (g_vrWorldInternal) { g_state->realDraw(self, count, start); return; }   // the world route's own draw (vr_world_route.h)
@@ -5611,6 +5614,7 @@ void STDMETHODCALLTYPE hookedDrawIndexed(ID3D11DeviceContext* self, UINT count,
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexed(self, count, startIndex, baseVertex); cockpitGlassOverlayEnd(self); }
         if (!stationSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawIndexed(self, count, startIndex, baseVertex); });
+        if (blackHoleDiskWanted() && self == g_state->ownerCtx) blackHoleDiskAfterDraw(self, bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps));
         return;
     }
     if (g_vrWorldInternal) { g_state->realDrawIndexed(self, count, startIndex, baseVertex); return; }
@@ -5703,6 +5707,7 @@ void STDMETHODCALLTYPE hookedDrawInstanced(ID3D11DeviceContext* self, UINT perIn
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); cockpitGlassOverlayEnd(self); }
         if (!stationSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); });
+        if (blackHoleDiskWanted() && self == g_state->ownerCtx) blackHoleDiskAfterDraw(self, bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps));
         return;
     }
     if (g_vrWorldInternal) { g_state->realDrawInstanced(self, perInstance, instances, startVertex, startInstance); return; }
@@ -5793,6 +5798,7 @@ void STDMETHODCALLTYPE hookedDrawIndexedInstanced(ID3D11DeviceContext* self,
         if (flatDraw.needsActualDraw()) flatDraw.endActualDraw();
         if (cockpitGlassLegacyLive() && self == g_state->ownerCtx && cockpitGlassOverlayBegin(self)) { g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); cockpitGlassOverlayEnd(self); }
         if (!stationSkip) flatDraw.uiReissue([&] { ReissueClock flatClock(ReissueCaller::FlatUi); g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); });
+        if (blackHoleDiskWanted() && self == g_state->ownerCtx) blackHoleDiskAfterDraw(self, bindingShaderHash(BindSlot::Vs), bindingShaderHash(BindSlot::Ps));
         return;
     }
     if (g_vrWorldInternal) { g_state->realDrawIndexedInstanced(self, perInstance, instances, startIndex, baseVertex, startInstance); return; }

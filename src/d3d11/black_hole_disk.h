@@ -1,41 +1,69 @@
 #pragma once
 
-#include <d3d11.h>
 #include <atomic>
 #include <cstdint>
+#include <d3d11.h>
+
+class Config;
 
 namespace edvr {
 
-enum class BlackHoleDiskMode : uint8_t {
-    Off,
-    Simple,
-    Realistic
-};
+enum class BlackHoleDiskMode : uint8_t { Off = 0, Simple = 1, Realistic = 2 };
 
 namespace detail {
-// Armed flag: visual.black_hole_disk != Off
 extern std::atomic<bool> g_blackHoleDiskWanted;
 extern BlackHoleDiskMode g_blackHoleDiskMode;
-}  // namespace detail
+} // namespace detail
 
-// True while visual.black_hole_disk != off. One relaxed atomic load: the whole price of the feature while off.
 inline bool blackHoleDiskWanted() {
-    return detail::g_blackHoleDiskWanted.load(std::memory_order_relaxed);
+  return detail::g_blackHoleDiskWanted.load(std::memory_order_relaxed);
 }
 
-// Frame boundary lifecycle: re-checks visual.black_hole_disk if config generation changed.
-void blackHoleDiskFrameBoundary(ID3D11DeviceContext* ctx);
+// Dedicated 256-byte constant buffer uploaded to pixel-shader slot b0
+struct alignas(16) BlackHoleDiskConstants {
+  float camRight[4]; // [0] xyz = Eye camera Right unit vector in world space, w
+                     // = P00
+  float camUp[4];  // [1] xyz = Eye camera Up unit vector in world space,    w =
+                   // P11
+  float camFwd[4]; // [2] xyz = Eye camera Fwd unit vector in world space,   w =
+                   // P02
+  float projParams[4]; // [3] x = P12, y = timeSeconds, z = mode (1=simple,
+                       // 2=realistic), w = spin a*
+  float bhWorldDir[4]; // [4] xyz = BH unit direction in world space, w =
+                       // theta_g (GM / c^2 D in radians)
+  float diskNormal[4]; // [5] xyz = Disk spin axis unit normal in world space, w
+                       // = r_isco (in M)
+  float diskTangentU[4]; // [6] xyz = In-plane orthonormal basis U in world
+                         // space, w = r_out (in M, e.g. 30M)
+  float diskTangentV[4]; // [7] xyz = In-plane orthonormal basis V in world
+                         // space, w = peakTempK (e.g. 14000K)
+  float invViewProj0[4]; // [8] Sky dome InvViewProj row 0 (optional/valid when
+                         // params.x > 0)
+  float invViewProj1[4]; // [9] Sky dome InvViewProj row 1
+  float invViewProj2[4]; // [10] Sky dome InvViewProj row 2
+  float invViewProj3[4]; // [11] Sky dome InvViewProj row 3
+  float params[4]; // [12] x = useInvViewProj, y = exposureScale, z = r_horizon
+                   // (in M), w = b_crit (in M)
+  float pad[3][4]; // [13..15] Reserved / diagnostics (48 bytes)
+};
+static_assert(sizeof(BlackHoleDiskConstants) == 256,
+              "BlackHoleDiskConstants must be exactly 256 bytes");
 
-// After-draw hook in vscreen.cpp: detects the gravitational lens draw (vs=0x41E245D488BFE83E, ps=0x6EF82262EB12A037)
-// and executes the unrolled accretion disk pass into the active eye HDR target.
-void blackHoleDiskAfterDraw(ID3D11DeviceContext* ctx, uint64_t vsHash, uint64_t psHash);
-
-// Shadow update hooks from vscreen.cpp (called on Map/Unmap and UpdateSubresource)
-void blackHoleDiskCbMapped(void* resource, void* data);
-void blackHoleDiskCbUnmapped(void* resource);
-void blackHoleDiskCbUpdated(void* resource, const void* data, uint32_t bytes);
-
-// Shutdown / cleanup.
+// Lifecycle & boundary management
+void blackHoleDiskConfigure(Config &cfg);
+void blackHoleDiskOnFrameStart();
+void blackHoleDiskFrameBoundary(ID3D11DeviceContext *ctx);
 void blackHoleDiskShutdown();
 
-}  // namespace edvr
+// Draw hook: called from hookedDraw / hookedDrawIndexed in both VR and Flat
+// profiles
+void blackHoleDiskAfterDraw(ID3D11DeviceContext *ctx, uint64_t vsHash,
+                            uint64_t psHash);
+
+// Shadow table interception hooks for D3D11_BIND_CONSTANT_BUFFER updates
+void blackHoleDiskCbMapped(void *resource, void *data);
+void blackHoleDiskCbUnmapped(void *resource);
+void blackHoleDiskCbUpdated(void *resource, const void *data, uint32_t bytes);
+void blackHoleDiskBufferInvalidated(const void* resource);
+
+} // namespace edvr

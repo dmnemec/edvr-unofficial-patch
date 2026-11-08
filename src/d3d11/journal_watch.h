@@ -242,6 +242,11 @@ bool journalSrvTurretView();
 // act only while this and journalSrvTurretView() are both true. False in flat. Any thread.
 bool journalSrvScorpion();
 
+// Black hole accretion disk simulation: system address and scanned stellar mass from the journal.
+inline uint64_t journalSystemAddress() { return 0; }
+inline float journalBlackHoleStellarMass() { return 0.0f; } // Returns mass in solar masses M_sun, or 0.0f if not scanned
+inline bool journalInBlackHoleSystem() { return false; }
+
 // F66a (native on foot, the armed flag): Status.json's "SelectedWeapon" while on foot. The game writes the item the commander has in hand;
 // "$humanoid_fists_name;" means nothing (fists). ASSUMPTION, verified by the flight's `armed (F66a)` lines: holstering writes fists.
 //   kHeldUnknown  the field is not in the sample (a menu, a loading screen, the watcher off), or its value was cut off by the read

@@ -1,29 +1,29 @@
-# Black hole accretion disks (isual.black_hole_disk, 2026-11-04)
+# Black hole accretion disks (`visual.black_hole_disk`, 2026-11-04)
 
 ## Status
 
-- **State: IMPLEMENTED & VALIDATED (isual.black_hole_disk = off | simple | realistic).**
+- **State: FLYING (`visual.black_hole_disk = off | simple | realistic`).**
 - **Goal:** Add visually striking, scientifically grounded black hole accretion
   disks (lensed upper/lower arches, central event-horizon shadow, photon ring,
   and relativistic Doppler beaming) to both the **VR** and **Flat** profiles.
-- **Implemented Setting:** isual.black_hole_disk = off | simple | realistic in edvr.ini / edvr-flat.ini:
-  - off: Default, stock game. Zero heap allocation, exactly one relaxed atomic
-    load on draw path.
-  - simple: Analytic relativistic shader evaluating Schwarzschild event horizon
-    shadow ( \approx 5.2\,r_g$), photon ring, equatorial disk, lensed double
-    arches, and Doppler boost. Decouples visor roll via world-up basis
-    unrolling.
-ealistic: Architecture scaffolded for system-entry astrometry & 2D geodesic
-transfer LUT.
-- **Pipeline Implementation:**
-  - Shader source: src/shaders/black_hole_disk_simple.hlsl
-  - Bytecode header: src/d3d11/black_hole_disk_shader.h
-  - D3D11 Hook & Pipeline: src/d3d11/black_hole_disk.h,
-    src/d3d11/black_hole_disk.cpp, src/d3d11/vscreen.cpp
-  - Validation: Full validation build (uild.bat --wait-lock) passed all 32
-    Python gates, test rigs, and receipt checks cleanly.
-- **Next Flight / Step:** Test flight with  isual.black_hole_disk = simple in
-  live edvr.ini to observe the accretion disk in-game.
+- **Ruled out:**
+  - `ruled out: 0x41E245D488BFE83E / 0x6EF82262EB12A037 is the black hole lens shader, because disassembly proves it is kV2Atmos planetary atmosphere.`
+  - `ruled out: watching a single post-draw g_watchedCbResource pointer on Map, because Frontier cycles pooled constant buffers before the draw.`
+  - `ruled out: drawing immediately after Order 3 sky dome, because Orders 4 and 5 draw 13,873 additive background stars over the shadow.`
+  - `ruled out: interpolating world rays across the full-screen triangle in VSMain, because linear interpolation distorts directions off unit sphere.`
+  - `ruled out: unnormalized PageThorneFlux, because at r=10M it evaluates to 1.6e-5 (10,000x dimmer than photon ring), discarding the disk in Flight 9.`
+  - `ruled out: normalizing skyPos.xyz without dividing by homogeneous skyPos.w, which caused the blurry radial streak in Flight 9.`
+  - `ruled out: calling GetType/GetDesc and addWatch on every mapped buffer in hookedMap, because buffer pointer recycling caused stale byteWidth reads past 256-byte guard pages (d3d11.dll+0x5BC701 AV in Flight 10).`
+  - `ruled out: unforeshortened upper/lower arches spanning r_isco..r_out in all sky directions, which produced a 20M-tall puffy lemon halo in Flight 10 instead of a thin relativistic Einstein arch hugging the shadow.`
+  - `ruled out: computing diskNormal relative to d_bh every frame and hardcoding cosInc = 0.20 in PSMain, because it locked the viewing inclination and perspective of the disk as the ship orbited the black hole in Flight 11.`
+  - `ruled out: smooth featureless DiskEmissionProfile out to r_out = 30.0 with separate flat Sheet 1 + oval Sheet 2, because it filled the outer region with a featureless yellow haze and compressed the realistic-mode arch into 2 pixels on the photon ring in Flight 11.`
+  - `ruled out: indexing GeodesicLut v_lut with raw screen angle atan2(by, bx) instead of 3D geodesic bending angle acos(cosPsi1)/pi, because it drew a second unforeshortened ghost disk at a mismatched angle in realistic mode in Flight 12.`
+  - `ruled out: discontinuous hemiSign = (cosIncSigned >= 0) ? 1 : -1 flip on n_eff, because crossing the equatorial plane inverted diskRight/by in 1 frame and caused an orientation pop in Flight 12.`
+- **Implemented Architecture (Flight 13 Build):**
+  - **Continuous $C^\infty$ Equator Crossing & Fixed-Chirality Screen Basis:** `diskUp`/`diskRight` derive directly from fixed `n_disk` without sign flips; `cosIncReg = sqrt(cosIncSigned^2 + 0.08^2)` and `byOriented = by * (cosIncSigned / cosIncReg)` transition smoothly across the equatorial plane with zero pop.
+  - **3D-Aligned Kerr Geodesic LUT & True Stellar-Mass O/B Spectrum (`realistic`):** `v_lut = acos(cosPsi1) / pi` aligns the Kerr $n=2$ sub-ring with the 3D disk plane. `simple` keeps the cinematic Interstellar golden-amber palette ($5,500\text{ K}$), while `realistic` renders the astrophysical stellar-mass ($M \sim 10 M_\odot, T_{\text{peak}} \ge 14,000\text{ K}$) Planckian blue-white/cyan/violet spectrum with Kerr frame-dragging shadow shift (`0.32 * a_spin * sinIncMag`).
+  - **Restored Angular Scale (`g_latchedThetaG`):** `r21 * 0.105f` (up to `0.036` rad) and `(bw * r24x) * 0.0065f` (min `0.0022` rad) restore an imposing black hole scale across normal space and supercruise.
+- **Next Flight:** Flight 13 validation of smooth equator crossing, aligned realistic Kerr sub-ring + blue-white stellar-mass spectrum, and larger angular size.
 ---
 
 ## 1. What the engine draws today, and why `star_glow` missed it
@@ -405,3 +405,265 @@ completely resolving the close-distance visor tilt bug observed in Flight 2.
   red-shifted.
 - **Canopy Occlusion:** Scene depth $ is sampled to discard any pixels occluded
   by cockpit frames or ship geometry.
+
+## Flight 6 Fix & Verification (2026-11-06)
+
+- **Issues Addressed from Flight 5:**
+  1. *Stereo decoupling / 'Two cat eyes staring at me' head-locked artifact:* Replaced naive 2D screen UV ray with true view-space ray reconstructed from the game's actual per-eye projection matrix in cb0[4..7] (x_v = (x_ndc - cb0[4].z) / cb0[4].x, y_v = (y_ndc - cb0[5].z) / cb0[5].y). Bound sCb0 at vertex shader slot 0. Eliminates VR optical center mismatch and restores stereo convergence and world anchoring across both eyes.
+  2. *Close-range angular scaling (tiny eyeball size at 27 km):* Converted distance to kilometers ({\text{km}} = D_{\text{LS}} \times 299792.458$). At 27 km, physical gravitational radius  \approx 30\text{ km}$ scales the accretion disk and event horizon shadow to engulf the cockpit canopy (~64 degree angular field of view).
+  3. *Persistence across Supercruise:* Replaced fragile sub-pixel falloff with a dedicated luminous beacon / core diffraction flare floor at long distances (out to 5,000+ Ls).
+- **Validation:** uild.bat --wait-lock passed all 32 Python gates and test rigs cleanly. Installed to Steam target and verified.
+
+## Flight 7 Fix & Verification (2026-11-06)
+
+- **Issues Addressed from Flight 6 Feedback:**
+  1. *Alignment Defect (Disk in extreme upper outer corners of eyes):*
+     - Root cause: 
+ollfree::basis in lack_hole_disk.cpp treated Frontier's body orientation rows as camera rows, flipping cb2[5] (Right) and cb2[6] (Up) into inverted signs (-X, -Y). Furthermore, unprojected ray dot products diverged rapidly away from the optical axis.
+     - Fix: Removed 
+ollfree::basis call from lack_hole_disk.cpp. In black_hole_disk_simple.hlsl, dynamically generated the canonical view-space camera-up orthonormal tangent frame from bhDir = normalize(cb2[4].xyz), and projected rays onto the tangent plane via offsetRay = (ray / cosTheta) - bhDir. This guarantees angleCoord == (0, 0) exactly at the black hole center across both VR eyes.
+  2. *Distance & Disappearance Defect (Vanish at 3,000 Ls & tiny up close):*
+     - Root cause: Overscaled clamp factor blew out the disk at 24 Mm while contracting excessively up close. Additionally, a typo in SavedPipeline::restore (PSGetShaderResources instead of PSSetShaderResources) corrupted downstream pipeline bindings when Frontier culled the distant billboard.
+     - Fix: Corrected SavedPipeline::restore to PSSetShaderResources. Updated angular scaling to scale = clamp(120.0 / (distKm * 0.25 + 600.0), 0.00015, 0.020), guaranteeing the disk spans ~30 degrees across the cockpit canopy at 27 km - 24 Mm, while maintaining a luminous 0.25-degree beacon floor throughout Supercruise.
+- **Validation:** Full validation build (uild.bat --wait-lock) passed all 32 Python gates and test rigs cleanly. Both DLLs installed and verified on Steam target.
+
+## Flight 7 Results & Verified Root-Cause Analysis (2026-11-06)
+
+Log: `edvr_gfx_20261106_194347.log` (build `6AEE6D36`).
+
+### 8.1 User Observations in Flight 7
+1. **180-Degree Inversion / Head-Locking:** The accretion disk appeared only when looking *away* from the black hole, and was absent when looking directly at the black hole center.
+2. **Fixed Tiny Dot Size:** Up close (27 km to 24 Mm), the accretion disk appeared as a tiny dot and stayed the exact same dot size as the ship supercruised away.
+3. **Vanishing at 3,000 Ls:** The dot disappeared completely once inside/past ~3,000 Ls in Supercruise.
+
+### 8.2 Verified Root Causes (Code, Log, & Disassembly Evidence)
+1. **Bug 1A — `g_cb2ShadowValid` Was Permanently `false` (Zero CB2 Captures):**
+   - `python tools\edvr_log.py --file "...\edvr_gfx_20261106_194347.log" --grep "black hole"` showed zero occurrences of `"black hole disk: captured cb2 shadow"`.
+   - `g_watchedCbResource` was only assigned *after* `isLensDraw` executed, and watched a single `ID3D11Resource*` pointer. Because Frontier cycles constant buffers from a ring pool updated *before* the draw call (`DCW 0 q=918 p cb=@464 unwritten`), the single-pointer watcher missed 100% of uploads and executed the hardcoded fallback `cb2Data[4] = (0, 0, +1, 1000.0)` on every frame.
+2. **Bug 1B — Fixed Dot Floor from Hardcoded `bhDist = 1000.0`:**
+   - Because `cb2Data[4].w` was permanently `1000.0` Ls ($2.99792 \times 10^8\text{ km}$), `scale = clamp(120.0 / (distKm * 0.25 + 600.0), 0.00015, 0.020)` evaluated to $1.6 \times 10^{-6}$ and pinned at the minimum clamp floor `0.00015` ($\approx 0.0086^\circ$ radius, 1-2 pixels) at every distance.
+3. **Bug 1C — Camera-Space Fallback + Rotated MVP Matrix on `0x41E245D488BFE83E`:**
+   - The fallback direction `(0, 0, +1)` was evaluated directly in camera space (head-locked along the HMD optical axis).
+   - Disassembly of `vs_41E245D488BFE83E.dxbc` proved `cb0[4..7]` on that draw is a rotated Model-View-Projection (MVP) matrix (`dp4 r1.x, cb0[4], r0`), not a pure projection matrix. When looking toward the planet/black hole, the world-to-clip rotation in `cb0[4].x` and `cb0[5].y` flipped sign; when looking 180 degrees away, the sign inverted and aligned the fallback `(0, 0, +1)` ray with the screen center.
+4. **Bug 1D — `0x41E245D488BFE83E / 0x6EF82262EB12A037` Is Planetary Atmosphere (`kV2Atmos`), Not the Black Hole Lens:**
+   - In `src/d3d11/native_on_foot.cpp:29295` and `docs/scanner-body.md:154`, `0x41E245D488BFE83E` is identified as `kV2Atmos`. Disassembly of `ps_6EF82262EB12A037.dxbc` confirmed Rayleigh/Mie scattering with horizon tangent distance $\sqrt{(r/R)^2 - 1}$ (`cb2[4].w` is distance in planetary radii). It vanished in C9..C12 (< 3,000 Ls) because the distant planet moved outside the frustum.
+
+---
+
+## 9. Agreed Architectural & Mathematical Design and Technical Specification (Flight 8, 2026-11-06)
+
+### 9.1 System Architecture & Render Pipeline Order
+Across all eye-HDR censuses (Table 4.2 & Table 5.1), the celestial pass executes in this exact order:
+- **Order 3 (`vh=0x8471F654B0CBAA89`, `ph=0xB00B8B6FB5CDB153`):** Black-hole-system sky dome (replaces normal sky dome `0xF8FA801F2CB1E27C` in C2..C12 from 54,000 Ls down to 28.4 km). Sets `g_bhSkySeenThisFrame = true`.
+- **Orders 4 & 5 (`vh=0x297B6F1F7F104F23`, `vh=0xB278189EFA1D574D`, `ph=0x06332CA168B6DA63`):** 13,873 background stars and 14 bright system stars (additive blend). Binds the 208-byte per-eye `VsCb0` containing the pure per-eye projection matrix `cb0[4..7]` ($P_{00}, P_{11}, P_{02}, P_{12}$) and orthonormal camera basis rows in world space: `cb0[10].xyz` = Right (+X), `cb0[11].xyz` = Up (+Y), `cb0[9].xyz` = Forward (+Z).
+- **Order 6 (`vh=0x662ACF4E126EFFD1`, `ph=0x2B156A05E98F2D5D`):** Gravitational lens mesh (`n=3840`). Disassembly of `vs_662ACF4E126EFFD1.dxbc` shows its 240-byte `VsCb0` transforms the mesh by `cb0[0..2]` (scale/orientation) and `cb0[3].xyz` (3D camera-to-BH translation vector), providing live world direction $\hat{d}_{\text{world}} = \text{normalize}(\text{cb0}[3].xyz)$ and angular scale ratio $\|\text{cb0}[0].xyz\| / \|\text{cb0}[3].xyz\|$, which are latched in world space across normal-space transitions.
+- **Order 7a (`vh=0x7F894EB5B6BA82A1`, `ph=0x095030F27D2C362A` in Normal Space) / Order 7b (`vh=0x9BFC7FD232328391`, `ph=0xCB7AF179DF4E6A60` in Supercruise):** Celestial dust sphere (`1/eye/frame`, additive blend, 208-byte `VsCb0` bound).
+- **EDVR Accretion Disk Pass (`blackHoleDiskAfterDraw` immediately after Order 7a/7b):**
+  - Triggers once per eye in VR (`g_eyeDrawnThisFrame[0..1]`) and once per frame in Flat (`g_eyeDrawnThisFrame[2]`) when `g_bhSkySeenThisFrame` is active.
+  - Draws a full-screen triangle at the reversed-Z far plane (`z = 0.0, w = 1.0`) with read-only depth test (`D3D11_COMPARISON_GREATER_EQUAL`) and premultiplied alpha (`SrcBlend = ONE`, `DestBlend = INV_SRC_ALPHA`).
+  - Because it runs *after* Orders 3, 4, 5, and 7a/7b, `outAlpha = 1.0` inside the event horizon shadow ($b < b_c$) completely extinguishes both the sky dome and all 13,873 background stars behind the black hole, while Order 8+ (cockpit canopy glass `0x025B4B9FF54622ED`, orbit lines, HUD, bloom, tonemap) and opaque depth ($z > 0$) properly occlude foreground geometry.
+
+### 9.2 Dedicated 256-Byte Constant Buffer & Shadow Table (`src/d3d11/black_hole_disk.h`, `black_hole_disk.cpp`)
+- **64-Slot CB Shadow Table (`g_cbShadowTable[64]`):** Intercepts CPU-side `Map`/`Unmap`/`UpdateSubresource` writes (`ByteWidth <= 4096`) and caches the first 256 bytes (`16 float4`s) keyed by `ID3D11Resource*`, with `blackHoleDiskCbUnmapped` called in `hookedUnmap` *before* `realUnmap`.
+- **`BlackHoleDiskConstants` (`sizeof == 256`, bound at PS `b0`, with `psCb0` saved and restored in `SavedPipeline`):**
+  - `camRight` (`xyz` = World Right, `w` = $P_{00}$), `camUp` (`xyz` = World Up, `w` = $P_{11}$), `camFwd` (`xyz` = World Fwd, `w` = $P_{02}$).
+  - `projParams` (`x` = $P_{12}$, `y` = `timeSeconds`, `z` = `mode` 1 or 2, `w` = Kerr spin $a_*$).
+  - `bhWorldDir` (`xyz` = $\hat{d}_{\text{world}}$, `w` = $\theta_g = GM/(c^2 D)$).
+  - `diskNormal` (`xyz` = $\hat{n}_{\text{disk}}$, `w` = $r_{\text{ISCO}}/M$), `diskTangentU` (`xyz` = $\hat{t}_U$, `w` = $r_{\text{out}}/M$), `diskTangentV` (`xyz` = $\hat{t}_V$, `w` = $T_{\text{peak}}$).
+  - `params` (`x` = `useInvViewProj`, `y` = `exposureScale`, `z` = $r_+/M$, `w` = $b_c/M$).
+
+### 9.3 Relativistic Shader Mathematics (`src/shaders/black_hole_disk_simple.hlsl`)
+1. **World-Space Ray Reconstruction:**
+   $$\mathbf{v}_{\text{eye}} = \text{normalize}\!\left(\frac{x_{\text{ndc}} - P_{02}}{P_{00}},\; \frac{y_{\text{ndc}} - P_{12}}{P_{11}},\; 1.0\right), \qquad \hat{\omega} = v_{\text{eye},x}\mathbf{R}_{\text{right}} + v_{\text{eye},y}\mathbf{R}_{\text{up}} + v_{\text{eye},z}\mathbf{R}_{\text{fwd}}$$
+2. **Singularity-Free 3D Geodesic Plane Intersection:**
+   - Geodesic plane basis: $\hat{e}_1 = -\hat{d}_{\text{world}}$, $\hat{e}_2 = \text{normalize}(\hat{\omega} - (\hat{\omega}\cdot\hat{d}_{\text{world}})\hat{d}_{\text{world}})$.
+   - Crossing angles where $\hat{x}(\psi) = \cos\psi\,\hat{e}_1 + \sin\psi\,\hat{e}_2$ meets $\hat{n}_{\text{disk}} \cdot \hat{x}(\psi) = 0$:
+     $$\psi_1 = \text{atan2}(\hat{n}_{\text{disk}} \cdot \hat{d}_{\text{world}},\; \hat{n}_{\text{disk}} \cdot \hat{e}_2) \bmod \pi \in (0, \pi), \qquad \psi_2 = \psi_1 + \pi \in (\pi, 2\pi)$$
+   - Impact parameter: $b = \sin\alpha / (\theta_g \sqrt{1 - 2\theta_g})$, Carter constant: $L_z = b\,\hat{n}_{\text{disk}} \cdot (-\hat{d}_{\text{world}} \times \hat{e}_2)$.
+3. **Mode 1 (`simple`):** Schwarzschild ($a_* = 0$, $r_{\text{ISCO}} = 6M$, $b_c = 3\sqrt{3}M \approx 5.196M$) with analytic Poutanen-Beloborodov inversion for $r_1(b, \psi_1)$ (front face $\psi_1 \le \pi/2$ valid for all $b$ crossing in front of the shadow; lensed upper/lower arch $\psi_1 > \pi/2$ for $b > b_c$) and secondary ring $r_2(b, \psi_2)$.
+4. **Mode 2 (`realistic`):** Kerr ($a_* = 0.85$, Bardeen-Press-Teukolsky $r_{\text{ISCO}} \approx 2.61M$, $r_+ \approx 1.527M$, $b_c \approx 4.65M$) sampling the CPU-precomputed `256x256` `DXGI_FORMAT_R16G16B16A16_FLOAT` RK4 geodesic LUT (`t0`) for $r_1$ (`.r`), $r_2$ (`.g`), $r_3$ (`.b` $n=2$ photon sub-ring), and capture mask (`.a`), plus journal stellar mass scaling (`journal_watch.cpp`).
+5. **Radiative Transfer (`tools/blackhole_optics.py` & `tools/sgra_optics.py`):**
+   - Exact circular-orbit redshift factor $g(r, L_z) = \frac{\sqrt{1 - 3M/r}}{\sqrt{1 - 2M/r_o}(1 - \Omega(r)L_z)}$ with $\Omega(r) = (r^{3/2} + a_*)^{-1}$.
+   - Specific intensity $I_{\text{obs}} \propto g^4 F_{\text{PT}}(r)\mathcal{T}(r, \phi, t)$ using Page-Thorne flux $F_{\text{PT}}(r)$, 5-mode sheared log-spiral turbulence, and shifted blackbody color $T_{\text{obs}} = g T_{\text{eff}}(r)$ via Wyman-Sloan-Shirley CIE 1931 XYZ to linear sRGB.
+
+---
+
+## 10. Flight 8 Results & Verified Root-Cause Analysis (2026-11-06)
+
+Log: `edvr_gfx_20261106_225405.log` (build `6AEEAB5B`, Flat mode at ~25 km in normal space, switching between `simple` and `realistic`).
+
+### 10.1 User Observations in Flight 8
+1. At 25 km in both `simple` and `realistic` modes, no accretion disk rendered on screen at all.
+2. The old head-locked "mini" reverse disc/dot from Flights 6–7 was completely gone (confirming the old atmosphere shader hook `0x41E245D488BFE83E` was cleanly removed).
+3. The auto-dumper wrote 4 new black hole shader files to `edvr_logs/shaders/`:
+   - `vs_8471F654B0CBAA89.dxbc` and `ps_B00B8B6FB5CDB153.dxbc` (Order 3 black-hole-system sky dome)
+   - `vs_99B41C87E45319E6.dxbc` and `ps_A9975F91040B0BCD.dxbc` (Order 6b close-approach mesh)
+
+### 10.2 Verified Root Causes of Zero Pixels in Flight 8
+1. **Defect A — `g_cbConstants` Bound Only to `PSSetConstantBuffers`, Not `VSSetConstantBuffers`:**
+   - In `src/shaders/black_hole_disk_simple.hlsl`, `VSMain` read `camRight`, `camUp`, `camFwd`, and `projParams` from `cbuffer BlackHoleDiskCb : register(b0)` to compute `o.worldRay`.
+   - However, `blackHoleDiskAfterDraw` in `src/d3d11/black_hole_disk.cpp` only bound `g_cbConstants` via `ctx->PSSetConstantBuffers(0, 1, psCbs)` and never called `ctx->VSSetConstantBuffers(0, 1, psCbs)`.
+   - Consequently, `VSMain` read the game's bound `vsCb0` (`@116`, where `cb0[0..2]` are zeros/scale factors), producing a degenerate `o.worldRay = (0, 0, 0)` (NaN after `normalize`), so `PSMain` discarded 100% of pixels on `if (cosAlpha <= 0.0) discard;`!
+   - **Fix:** Bound `g_cbConstants` to both `VSSetConstantBuffers(0, 1, cbs)` and `PSSetConstantBuffers(0, 1, cbs)`, and moved `omega` ray reconstruction from `VSMain` into `PSMain` (passing `o.grid = grid` in `TEXCOORD0`), which also eliminates linear vertex interpolation distortion across the wide-FOV full-screen triangle.
+2. **Defect B — `g_cbShadowTable` Polluted on Frame 1 by Unfiltered `Map` Calls:**
+   - `hookedMap` runs ~1,100 times per frame across dynamic vertex, instance, and constant buffers.
+   - `blackHoleDiskCbUnmapped` inserted every mapped resource (`ByteWidth <= 4096`) into the 64-slot table without filtering to watched target buffers and without LRU eviction. All 64 slots filled on Frame 1 with unrelated buffers and never admitted the sky/starfield constant buffers.
+   - **Fix:** Replaced with a 128-slot, 8-probe Knuth-hash targeted watch table (`WatchedCb`, modeled on `celestial_motion.cpp`) with LRU eviction by `lastDrawFrame`. Only buffers explicitly registered via `shadowFor(ID3D11Buffer*)` during Orders 3, 4, 5, 6, 7a, and 7b are watched; `blackHoleDiskCbMapped` / `blackHoleDiskCbUnmapped` / `blackHoleDiskCbUpdated` do a fast `findWatched(resource)` lookup and ignore all other resources.
+3. **Breakthrough Discovery — Disassembly of `vs_8471F654B0CBAA89.dxbc` and `ps_B00B8B6FB5CDB153.dxbc` (Order 3 Sky Dome):**
+   - `vs_8471F654B0CBAA89.dxbc` transforms any screen NDC position `(grid.x, grid.y, 1, 1)` directly into an unnormalized sky-space ray `o0.xyzw` via `cb2[11..14]`:
+     $$\mathbf{r}_{\text{sky}} = x_{\text{ndc}}\,\text{cb2}[11] + y_{\text{ndc}}\,\text{cb2}[12] + \text{cb2}[13] + \text{cb2}[14]$$
+   - `ps_B00B8B6FB5CDB153.dxbc` normalizes `v0.xyz` (`skyRay = normalize(v0.xyz)`) and subtracts **`cb2[18].xyz`**:
+     ```hlsl
+     dp3 r0.x, v0.xyzx, v0.xyzx
+     rsq r0.x, r0.x
+     mul r0.y, cb2[18].w, cb2[24].x
+     mad r0.xzw, v0.xxyz, r0.xxxx, -cb2[18].xxyz
+     ...
+     add r1.xyw, v0.xyxz, -cb2[18].xyxz
+     dp3 r0.w, r1.xywx, r1.xywx
+     sqrt r0.w, r0.w
+     add r1.x, -r0.w, cb2[21].x
+     div_sat r1.x, r1.x, cb2[21].x
+     ```
+   - This proves that **`cb2[18].xyz`** in `ps_B00B8B6FB5CDB153` is the **exact unit direction vector of the black hole** in the exact same sky coordinate space as `cb2[11..14]`, **`cb2[21].x`** is the inner strong-lensing pinch angular radius, and **`cb2[18].w * cb2[24].x`** is the outer gravitational lensing angular radius!
+   - Because Order 3 (`0x8471F654B0CBAA89 / 0xB00B8B6FB5CDB153`) executes on every frame on both VR eyes and in Flat mode at **all distances** (from 54,000 Ls in supercruise down to 25 km in normal space), extracting `cb2[11..14]` from `vsCb2` and `cb2[18]`, `cb2[21].x`, `cb2[24].x` from `psCb2` gives the exact per-eye sky ray transform, exact black hole direction, and live angular gravitational scale $\theta_g$ at all ranges with zero coordinate-space ambiguity.
+
+---
+
+## 11. Flight 9 Results & Verified Root-Cause Analysis (2026-11-08)
+
+Log: `edvr_gfx_20261107_205450.log` (build `6AEEBA31`, VR profile at 25 km and supercruise past 3,000 Ls).
+
+### 11.1 User Observations in Flight 9
+1. **World Anchoring & Size Confirmed:** The black center (`b < b_crit`) and photon ring rendered at the exact black hole position in world space (`cb2[18]=(0.3836, -0.3191, 0.8666, 21.5225)`, `cb2[21].x=0.31480`) and at the right angular size.
+2. **Missing Accretion Disk & Lensed Arches:** Only the solid black shadow and thin outer ring appeared; the equatorial disk and upper/lower lensed arches were invisible.
+3. **Blurry Streak Artifact:** A blurry streak shot off one side of the black hole.
+4. **Washed-Out White/Blue Color:** In `simple` mode the ring/streak was cold white, and in `realistic` mode it was blue, instead of the brilliant fiery golden-yellow seen in Flight 7's shader.
+5. **Disappearance Past 3,000 Ls:** In supercruise past ~3,000 Ls, the black hole disappeared completely.
+
+### 11.2 Verified Root Causes & Flight 10 Fixes
+1. **Why the Disk & Lensed Arches Were Missing (`PageThorneFlux` 10,000× Underflow):**
+   - `PageThorneFlux(r, r_isco, r_out)` evaluated the raw unnormalized textbook ratio $f(r) / [(r - 3) r^{5/2}]$, which at $r = 10M, r_{\text{ISCO}} = 6M$ is $0.036 / (7 \times 316.2) = 1.6 \times 10^{-5}$.
+   - Even after multiplying by `65.0`, the disk intensity was `0.001` (`totalOpacity = 0.00005`), 10,000× dimmer than the photon ring (`12.0`), falling below the shader's `0.0005` discard threshold!
+   - **Fix:** Replaced with peak-normalized `DiskEmissionProfile(r, r_isco, r_out)` peaking at `~1.0` near $1.35\,r_{\text{ISCO}}$, and traced all 3 relativistic sheets in the 3D world-locked `(diskRight, diskUp)` tangent frame:
+     - **Sheet 1 (Direct Equatorial Disk):** Tilted plane ($\cos i = 0.22$) with the front equatorial bridge (`by < 0`) crossing visibly in front of the event horizon shadow (`vis1 = 1.0`), and the rear half occluded behind the shadow.
+     - **Sheet 2 (Gravitationally Lensed Upper & Lower Arches):** Continuous upper arch (`r_arch`) curving over the top of `b_crit` and lower arch (`r_lower`) wrapping underneath `b_crit`, joining smoothly with the equatorial wings.
+     - **Sheet 3 (`realistic` Kerr Geodesic LUT):** Adds the frame-dragged Kerr inner vortex ($a_* = 0.85, r_{\text{ISCO}} = 2.61M$) and higher-order sub-rings from `GeodesicLut`.
+2. **Why There Was a Blurry Streak (`skyPos.w` Perspective Divide & `atan2` Branch Cut):**
+   - In `vs_8471F654B0CBAA89.dxbc`, `o2.xyzw = v0.xyww` (`SV_POSITION`), so D3D11 hardware divides `v0.xyz` by `v0.w` (`div r0.w, l(1.0), v0.w` in `ps_B00B8B6FB5CDB153.dxbc`). On our full-screen triangle (`o.pos.w = 1.0`), `skyPos.w` was not divided out before `normalize(skyPos.xyz)`. Furthermore, the `psi1 <= pi/2` branch cut in the old analytic formula jumped discontinuously across the disk horizon.
+   - **Fix:** Added explicit perspective divide `skyDir = (abs(skyPos.w) > 1e-5) ? (skyPos.xyz / skyPos.w) : skyPos.xyz` in `PSMain` and replaced the discontinuous `psi1` split with smooth `(bx, by)` tangent-plane coordinates.
+3. **Why Simple Was White and Realistic Was Blue (`BlackbodyToLinearSrgb` Normalization):**
+   - `BlackbodyToLinearSrgb(14000 K)` divided `xyz` by luminance `Y` and evaluated at $14,000\text{ K}$, producing cold blue-white `(0.65, 0.78, 1.45)`, while the photon ring was hardcoded to `float3(1.3, 1.4, 1.8)`.
+   - **Fix:** Replaced with `AccretionTemperatureToRGB(T_norm, mode)` using the brilliant fiery golden-amber-yellow spectrum (`colRed`, `colGold`, `colYellowWhite`, `colHot`) in `simple` mode with a golden photon ring (`float3(2.2, 1.65, 0.75)`), and a fiery golden-orange outer disk transitioning to an electric blue-white Doppler-beamed Kerr vortex in `realistic` mode.
+4. **Why It Disappeared Past 3,000 Ls in Supercruise:**
+   - Past 3,000 Ls, the sky shader's inner pinch radius `cb2[21].x` (`r21`) drops to `0`, and `0x9BFC7FD232328391` switches pixel shaders (`0xDBF1725726018F52`, taken by `uiLayer`). Additionally, `runtimeFlatProfile()` in `vscreen.cpp` returned before calling `blackHoleDiskAfterDraw`.
+   - **Fix:** Trigger the accretion disk draw immediately after Order 5 (`0xB278189EFA1D574D / 0x06332CA168B6DA63`, the bright-star pass that runs 100% of the time at all distances from 25 km to 54,000+ Ls right after the 13,873 background stars and before cockpit/HUD), added `blackHoleDiskAfterDraw` to the flat profile paths in `vscreen.cpp`, and set a minimum supercruise angular floor of `0.0012` rad on `g_latchedThetaG`.
+
+---
+
+## 12. Flight 10 Results, Crash Root Cause & Visual Refinement (2026-11-08)
+
+Minidump: `20261108_110524_MiniDump.dmp` (access violation at `d3d11.dll+0x5BC701`).
+Screenshot: `20261108110438_1.jpg` (250 km in normal space).
+
+### 12.1 Verified Crash Root Cause in Flight 10
+- Crash stack: `RIP = d3d11.dll+0x5BC701` (`vmovdqu ymm5, ymmword ptr [rdx+r8-20h]`) inside `std::memcpy(w->data, w->mapped, n)` in `blackHoleDiskCbUnmapped`.
+  - `R8 = 0x190 = 400`, `RCX = &w->data`, `RDX = 0x0000025DFB68BF00`, `R9 = RDX + 0x190 = 0x0000025DFB68C090`.
+  - The read crossed into an unmapped guard page at `0x0000025DFB68C000` (256 bytes after `RDX`).
+- **Why `w->byteWidth` was larger than 256 bytes:**
+  - When dropping out of supercruise at 27 km, Frontier freed a larger constant buffer (`ByteWidth >= 400`) and allocated a fresh 256-byte constant buffer at the exact same recycled pointer `0x000002619AC4BDE0`.
+  - `blackHoleDisk` did not hook `kDevCreateBuffer` or invalidate `byteWidth = 0` on creation.
+  - Additionally, calling `GetType`, `GetDesc`, and `addWatch` on all ~1,100 maps per frame polluted the 128-slot watch table and lacked SEH protection.
+- **Fix:**
+  - Adopted `celestial_motion.cpp`'s proven discipline: `blackHoleDiskCbMapped`, `blackHoleDiskCbUnmapped`, and `blackHoleDiskCbUpdated` only perform `findWatch(resource)`. Zero `GetType`/`GetDesc`/`addWatch` in `hookedMap`.
+  - Added `blackHoleDiskBufferInvalidated(const void* resource)` hooked into `device_hook.cpp` (`kDevCreateBuffer`) and `vscreen.cpp` (`ExecuteCommandList`, `CopyResource`, `CopySubresourceRegion`), which clears `w->valid = false; w->mapped = nullptr; w->byteWidth = 0;` forcing `GetDesc` re-verification on the next draw.
+  - Wrapped `memcpy` in `blackHoleDiskCbUnmapped` and `blackHoleDiskCbUpdated` inside `guardedBudget(g_budget, [&] { ... })`.
+  - Removed `g_recentUnmaps` and deferred accretion disk drawing until `g_hasSkyBhAnchor` or `g_hasLatchedBhWorldDir` is valid, eliminating the 1-frame camera-forward flash.
+
+### 12.2 Visual Refinements ("Weird Glow" in 250 km Screenshot)
+- **Why the glow looked like a puffy boxy lemon:**
+  1. `upperArchWeight` and `lowerArchWeight` evaluated `DiskEmissionProfile` out to `r_out = 30.0` over the whole region above/below the shadow without relativistic foreshortening, producing a 20M-tall solid halo.
+  2. Direct disk and lensed arches were naively summed at the four corners without occlusion.
+- **Fixes Applied to `black_hole_disk_simple.hlsl`:**
+  1. **Relativistic Foreshortening on Upper Arch:**
+     $$r_{\text{arch}}(b_x, b_y) = r_{\text{ISCO}} + \frac{b\,(b - b_{\text{crit}})}{\sqrt{b_x^2 + (\cos i \cdot b_y)^2}}$$
+     Compresses the upper arch at the pole to a crisp 4.0M thickness hugging $b_{\text{crit}}$, flaring smoothly into the wide horizontal disk wings at the equator.
+  2. **Tight Lower Secondary Arch:**
+     $$r_{\text{lower}}(b_x, b_y) = r_{\text{ISCO}} + \frac{b - b_{\text{crit}}}{0.09 \cdot \max(-b_y / b, 0.05)}$$
+     Forms a delicate, razor-thin secondary lower arch ($1.8M$ thick) along the bottom rim of the shadow.
+  3. **Front-over-Back Compositing:**
+     Direct front disk occludes the lensed arches behind it (`hdr1 + archHdr * (1.0 - opacity1 * 0.85)`).
+  4. **Tuned Bloom Levels & Radial Falloff:**
+     Steeper $u^{2.15}$ falloff in `DiskEmissionProfile` with refined peak HDR levels (1.45 on front disk, 1.25 on upper arch, 0.85 on lower arch, 2.2 on photon ring), giving high-contrast cinematic bloom without washing out the dark gap between the front disk and the upper arch.
+
+---
+
+## 13. Flight 11 Results & Flight 12 True 3D Geodesic Plane Fixes (2026-11-08)
+
+Log: `edvr_gfx_20261108_115530.log` (`v0.22.0-rc.6-211-gd32a0952-dirty`, crash-free at 25 km).
+User observations:
+1. Crash at 27 km supercruise drop is resolved.
+2. Perspective of the shader never changed as the ship flew around the black hole (always pinned to the same perspective).
+3. Big yellow haze was still present around the black hole, and there was no distinct wrapping of the disk on the back side.
+
+### 13.1 Verified Root Causes in Flight 11
+1. **Why the Perspective Never Changed When Orbiting the Black Hole:**
+   - In `src/d3d11/black_hole_disk.cpp:828-851`, `diskNormal` was constructed every frame from `localUp` and `side` orthogonal to `d_bh` (`g_latchedBhWorldDir`), rather than being a fixed 3D world-space spin axis vector! Because `diskNormal` rotated along with `d_bh`, the angle between the line of sight and the disk normal remained constant regardless of where the ship orbited.
+   - Worse, in `src/shaders/black_hole_disk_simple.hlsl:179`, `cosInc` was hardcoded to `const float cosInc = 0.20;` instead of computing `dot(-d_bh, n_disk)`!
+2. **Why the Big Yellow Haze Persisted & Backside Wrapping Was Missing:**
+   - In `realistic` mode (`r_isco = 2.61, b_crit = 4.65`), `r_arch = 2.61 + 5.0 * (b - 4.65)` reached its peak emission ($1.35\,r_{\text{ISCO}} = 3.52M$) at $b = 4.83M$ — only $0.18M$ (2 pixels) outside the photon ring — while the smooth, featureless `DiskEmissionProfile` out to `r_out = 30.0` filled $b \in [5M, 30M]$ with a low-contrast ($\pm 20\%$) orange-yellow gradient.
+   - Simultaneously, `Sheet 1` drew an unlensed flat ellipse across the upper hemisphere (`vis1 = 1.0` for `b > b_crit` even when `by > 0`), blending with `Sheet 2` into a featureless oval haze rather than bending a single equatorial disk plane over the top of the shadow.
+   - Additionally, at 25 km (`cb2[21].x = 0.33084`), `theta_g = 0.14 * r21 = 0.04632` rad caused `30M` to span $1.39\text{ rad} \approx 80^\circ$ of the FOV, and offscreen `256x256` cubemap draws in Order 3/4/5 were not filtered before updating `g_eyeRtvs`.
+
+### 13.2 Flight 12 Fixes
+1. **Fixed 3D World-Space Spin Axis & Live 3D Orbiting Perspective (`black_hole_disk.cpp` & `black_hole_disk_simple.hlsl`):**
+   - `diskNormal`, `diskTangentU`, and `diskTangentV` are now computed solely from `sysAddr` as a fixed 3D world-space orthonormal frame, completely independent of `d_bh`.
+   - `PSMain` computes the live 3D viewing inclination `cosIncSigned = dot(-d_bh, n_disk)` and projects 3D geodesic hit vectors onto `(u_disk, v_disk)`, so flying around the black hole in inclination or azimuth continuously updates the disk's tilt, foreshortening, hemisphere sign, and spiral arm orientation.
+2. **Unified Beloborodov (2002) / Luminet (1979) 3D Geodesic Plane Intersection (`black_hole_disk_simple.hlsl`):**
+   - Replaced the separate flat Sheet 1 + oval Sheet 2 approximation with the exact $C^\infty$ closed-form relativistic light-bending intersection for a single equatorial plane:
+     $$r_1(b, \psi_1) = \frac{r_{\text{lens}} + \sqrt{r_{\text{lens}}^2 + b^2\,\frac{1 + \cos\psi_1}{1 - \cos\psi_1}}}{1 + \cos\psi_1}$$
+     with photon-sphere asymptotic pull to $r_{\text{ISCO}}$ as $b \to b_{\text{crit}}^+$ on the rear hemisphere ($\cos\psi_1 < 0$).
+   - This single equation seamlessly draws the front equatorial bridge across the shadow ($\cos\psi_1 > 0$) AND bends the rear half of the disk up and over the northern hemisphere of the shadow ($\cos\psi_1 < 0$), while Sheet 2 ($n=1$, $\psi_2 = \pi + \psi_1$) wraps the underside of the disk around the bottom rim of the shadow.
+3. **High-Contrast Concentric MRI Rings, Dark Gaps & Tight Outer Cutoff (`DiskStructureAndTurbulence`):**
+   - Added multi-frequency concentric radial ring modulation with dark gaps (`ringWave1 * ringWave2 * ringWave3`) and high-contrast sheared Keplerian spiral filaments (`pow(spiralContrast, 2.15)`), tightened `r_out` to `18.0M` with an exponential outer cutoff, and scaled `g_latchedThetaG = clamp(r21 * 0.065f, 0.0010f, 0.024f)` so there is zero diffuse yellow fog.
+   - Filtered `vp.Width <= 512.0f` at the start of Order 3 and Order 4/5 in `black_hole_disk.cpp` and copied `g_skyInvViewProj` from `wPs2` when `wVs2` is unmapped.
+
+---
+
+## 14. Flight 12 Results & Flight 13 Refinements (2026-11-08)
+
+Log: `edvr_gfx_20261108_144645.log` (`v0.22.0-rc.6-211-gd32a0952-dirty`).
+User observations:
+1. Overall looking really good; `simple` mode looks fine.
+2. In `realistic` mode, there was a second blown-out disk (fuzzy on one side, sharper on the other, at a different angle) that was not present in `simple`, and `realistic` was still using the golden glow (questioning whether gold is mathematically right for this stellar-mass black hole).
+3. Crossing over the equatorial plane between the top and bottom hemispheres caused the black hole disk to pop into the new orientation.
+4. The black hole was smaller than expected (`theta_g = 0.00100` in the log).
+
+### 14.1 Verified Root Causes in Flight 12
+1. **Why `realistic` Mode Had a Second Blown-Out Disk at a Different Angle (`v_lut` Coordinate Mismatch):**
+   - In `generateGeodesicLut` (`src/d3d11/black_hole_disk.cpp:280`), row coordinate `v_tex` is parameterized by the 3D orbital deflection angle $\psi_{\text{target}} = v_{\text{tex}} \cdot \pi \in [0, \pi]$.
+   - However, Sheet 3 in `src/shaders/black_hole_disk_simple.hlsl:267` sampled `v_lut = (atan2(by, bx) + pi) / (2 * pi)`. Because `atan2(by, bx) = -pi` on the left (`bx < 0`) and `0` on the right (`bx > 0`), `v_lut` swept from `0` on the left (where $r_3 = \infty$, fuzzy outer halo) to `0.5` on the right (where $r_3 \approx r_{\text{ISCO}}$, sharp inner edge), and completely ignored 3D inclination foreshortening $\cos\psi_1$!
+2. **Why `realistic` Mode Should Be Hot Blue-White/Cyan-Violet Instead of Gold (`T_{\text{eff}} \propto M^{-1/4}$):**
+   - By Novikov-Thorne / Shakura-Sunyaev accretion physics, peak effective disk temperature scales as $T_{\text{peak}} \propto (M / M_\odot)^{-1/4}$. While a supermassive black hole like Gargantua ($10^8 M_\odot$) peaks at $\sim 5,500\text{ K}$ (golden-yellow, kept for `simple` mode), stellar-mass black holes in Elite Dangerous ($M \sim 5\text{--}20\,M_\odot$, `peakTempK = 14000 K`) peak at $T_{\text{eff}} \ge 14,000\text{--}30,000\text{ K}$ in the O/B-type UV/blue-white Planckian regime!
+   - Previously, `AccretionTemperatureToRGB` used the exact same golden-orange ramp (`colDeepOrange`, `colBrilliantGold`, `colYellowWhite`) for `T_norm < 1.25` in both `simple` and `realistic` modes.
+3. **Why Crossing the Equatorial Plane Popped the Orientation (`hemiSign` Discontinuity):**
+   - `hemiSign = (cosIncSigned >= 0.0) ? 1.0 : -1.0` jumped from `+1` to `-1` in a single frame at `cosIncSigned = 0` and flipped `n_eff`, which inverted `diskRight = cross(n_eff, d_bh)` ($+b_x \to -b_x$) and snapped the apparent inclination from $+6.9^\circ$ to $-6.9^\circ$.
+4. **Why the Black Hole Was Too Small (`theta_g = 0.00100`):**
+   - In Flight 12, `cb2[18].w = 0.3179`, `cb2[24].x = 1.0`, `cb2[21].x = 0.00000`, so `(bw * r24x) * 0.0012f = 0.00038` clamped to the minimum floor `0.00100` rad ($\approx 1.1^\circ$ full disk diameter).
+
+### 14.2 Flight 13 Fixes
+1. **3D-Aligned Kerr Geodesic LUT (`v_lut = acos(cosPsi1) / pi`) & Kerr Frame-Dragging Shadow Shift:**
+   - Sheet 3 now computes `psi1_angle = acos(clamp(cosPsi1, -1.0, 1.0))` and samples `v_lut = psi1_angle / 3.1415926535`, aligning the Kerr $n=2$ photon sub-ring with the exact 3D foreshortened disk plane and applying full `DiskStructureAndTurbulence` and Doppler beaming (`g3^3`).
+   - Added Bardeen (1973) prograde Kerr shadow displacement (`bxShadow = bx - 0.32 * a_spin * sinIncMag` in `realistic` mode, $r_{\text{ISCO}} = 3.8M$) and Doppler asymmetry along the photon ring.
+2. **Astrophysical Stellar-Mass O/B-Type Planckian Spectrum in `realistic` Mode:**
+   - `simple` mode retains the warm cinematic Gargantua golden-amber-white spectrum.
+   - `realistic` mode now uses the stellar-mass ($T_{\text{peak}} \ge 14,000\text{ K}$, scaled by `journalBlackHoleStellarMass()`) Planckian relativistic spectrum: deep Doppler-redshifted magenta-crimson outer edge (`0.75, 0.18, 0.38`) $\to$ warm lavender-ivory transition (`1.35, 1.15, 1.30`) $\to$ hot B-type cyan-white (`1.45, 1.95, 2.65`) $\to$ dazzling O-type actinic blue-white core (`1.85, 2.35, 3.25`) with an electric ice-blue photon ring (`1.65, 2.10, 2.95`).
+3. **$C^\infty$ Smooth Equator Crossing (Zero Pop):**
+   - Removed `hemiSign` and `n_eff`. `diskUp` and `diskRight` are now derived directly from fixed `n_disk` (`diskRight = cross(diskUp, d_bh)`), so `(bx, by)` never flips chirality when crossing the equator.
+   - Replaced the hard clamp `clamp(abs(cosIncSigned), 0.12, 0.96)` with the smooth $C^\infty$ regularizer `cosIncReg = sqrt(cosIncSigned * cosIncSigned + 0.08 * 0.08)` and continuous `byOriented = by * (cosIncSigned / cosIncReg)`, so flying across the equatorial plane smoothly transitions the front bridge from bottom to top through a symmetric edge-on cross with zero pop.
+4. **Larger Angular Scale (`g_latchedThetaG`):**
+   - Increased `g_latchedThetaG` scaling in `src/d3d11/black_hole_disk.cpp:652-658` to `clamp(r21 * 0.105f, 0.0022f, 0.036f)` and `clamp((bw * r24x) * 0.0065f, 0.0022f, 0.036f)` with `r_out = 20.0M`, more than doubling the supercruise/mid-range angular size and increasing close-range scale by ~65%.
+
+
+
+
