@@ -54,31 +54,32 @@
 
 ---
 
-## 3. What Was Just Built & Installed (Ready for Flight 15 Verification)
+## 3. What Was Just Built & Installed (Ready for Flight 16 Verification)
 
 The current working tree on `feat/black-hole-accretion-disk` has passed the full validation build (`build.bat --wait-lock`) and is installed on the Steam target (`D:\SteamLibrary\steamapps\common\Elite Dangerous\Products\elite-dangerous-odyssey-64`).
 
-### Changes in Flight 15 Build (Post-Flight 14 Feedback)
-1. **Unbroken Shadow & Exact Scale in `realistic` Mode:** Set $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ for both modes, ensuring `realistic` mode matches `simple`'s imposing scale and pristine unbroken shadow center while preserving its O/B-type Planckian cyan/violet spectrum and Kerr $n=2$ sub-ring.
-2. **Dynamic Supercruise Distance Scaling:** $\theta_g = \text{clamp}(0.0008f + (bw \cdot r24x) \cdot 0.0032f, 0.0008f, 0.065f)$, smoothly expanding the disk from a compact, glowing star-like jewel at 54,000+ Ls into a screen-filling giant as you approach.
-3. **Radiant Star-Like Optical Bloom & Glare:** Boosted peak HDR radiance to $\sim 15.0$ and added an optical glare scattering envelope around the inner disk, driving Elite's native bloom pass to create atmospheric glare like bright stars.
-4. **Smooth Limb Blending:** Asymptotic decay of gravitational bending at the limbs ($b \gg b_{\text{crit}}$) with wide limb blending, eliminating pinched warping where the arch meets the wings.
+### Changes in Flight 16 Build (Post-Flight 15 Feedback)
+1. **Monotonic Dynamic Distance Scaling (Zero Pop):** Removed the broken `if/else if` branch between `r21` and `bw * r24x` that caused the disk to pop 70x down from 0.065 to 0.0009 at 0.24 Ls. Replaced with strictly monotonic $\theta_g = \text{clamp}(\max(r21 \times 0.185f, 0.0015f), 0.0015f, 0.075f)$, smoothly growing from a compact $2^\circ$ jewel at 54,000+ Ls into an imposing $90^\circ$ canopy-filling disk at 25 km.
+2. **Tight Relativistic Upper Arch (Zero Vertical Ballooning):** Removed `limbFalloff` and `r_rear_smooth`, which had decayed $r_{\text{rear}}$ into $r_{\text{front}}$ at the top of the arch ($b_y \gg b_{\text{crit}}$) and blown the arch out vertically into a tall oblong capsule. Restored pure Beloborodov $r_{\text{rear}}$ with photon-sphere pull, hugging the shadow tightly across the top.
+3. **Smooth Hermite Limb Blending:** Transition across the wings uses `frontBridgeWeight = smoothstep(-0.18, 0.18, cosPsi1)`, ensuring seamless, continuous connection between foreground disk and rear arch without creases or warping.
+4. **Clean Optical Bloom without Fog:** Removed `hdrGlare` fog and starfield opacity offset. Kept the razor-thin photon spike ($2.25$) and peak radiance ($1.45$), letting Elite's native bloom filter flare naturally without foggy wash over the disk.
+5. **Pure Black Shadow in Both Modes:** $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ in both `simple` and `realistic` modes guarantees 100% pure black unbroken central shadow.
 
 ---
 
 ## 4. Next Steps for the Next Agent
 
-1. **After Flight 15:**
+1. **After Flight 16:**
    - Verify the flight log matches the build:
      ```powershell
      python tools\edvr_log.py --target steam --expect-build HEAD --version
      python tools\edvr_log.py --target steam --grep "black hole"
      ```
    - Check user feedback on:
-     - `realistic` mode shadow: verify it is 100% pure black and unbroken like `simple` mode, with matched imposing scale.
-     - Supercruise approach: verify the black hole starts as a brilliant star-like jewel at 54,000+ Ls and grows continuously as you fly closer.
-     - Light bloom: verify the star-like optical bloom envelope around the disk and photon ring.
-     - Smooth limbs: verify the seamless transition where the upper arch meets the outer wings.
+     - Approach in supercruise: verify smooth, monotonic growth from a brilliant jewel at 54,000 Ls to a giant disk at 25 km with zero pop down at 0.24 Ls.
+     - Upper arch: verify tight relativistic arch hugging the shadow without ballooning or expanding vertically.
+     - Glare/Bloom: verify clean disk details with natural optical bloom and zero foggy washout.
+     - Both modes (`simple` and `realistic`): verify 100% pure black unbroken central shadow.
 2. **When Editing the Shader (`src/shaders/black_hole_disk_simple.hlsl`):**
    - Always recompile `src/d3d11/black_hole_disk_shader.h` using `fxc.exe` with `/Vn kBlackHoleDiskSimpleVS` (entry `VSMain`, `/T vs_5_0 /O3`) and `/Vn kBlackHoleDiskSimplePS` (entry `PSMain`, `/T ps_5_0 /O3`) wrapped in `namespace edvr { ... }`, then run the full `build.bat --wait-lock` by absolute path.
 

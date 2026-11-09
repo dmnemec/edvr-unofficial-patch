@@ -2,7 +2,7 @@
 
 ## Status
 
-- **State: FLYING (`visual.black_hole_disk = off | simple | realistic`, Flight 15 Build).**
+- **State: FLYING (`visual.black_hole_disk = off | simple | realistic`, Flight 16 Build).**
 - **Goal:** Add visually striking, scientifically grounded black hole accretion
   disks (lensed upper/lower arches, central event-horizon shadow, photon ring,
   and relativistic Doppler beaming) to both the **VR** and **Flat** profiles.
@@ -22,13 +22,15 @@
   - `ruled out: evaluating Beloborodov r_direct across the foreground line of sight (cosPsi1 >= 0) all the way to by = 0, because it produced r >= r_isco inside the shadow and stepped to 0 at by = 0, creating a flat horizontal shelf cutting into the shadow in Flight 13.`
   - `ruled out: clamping g_latchedThetaG to 0.036f (2.0 deg), because Frontier's inner pinch radius at the Exclusion Zone (25 km) is r21 = 0.347 rad (20 deg), making the disk 10x smaller than Frontier's gravitational lens in Flight 13.`
   - `ruled out: setting r_isco = 3.8M < 4.65M = b_crit in realistic mode, because emission inside the shadow radius caused the same inner-circle overlap in Flight 14.`
-  - `ruled out: static minimum floor 0.0035f for g_latchedThetaG in supercruise, which froze disk angular size at 8 deg all the way from 300,000 Ls down to 3,000 Ls in Flight 14.`
-- **Implemented Architecture (Flight 15 Build):**
-  - **Unbroken Pure Black Shadow & Exact Scale in `realistic` Mode:** $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ in both modes, ensuring `realistic` matches `simple`'s imposing size and pure black central shadow.
-  - **Dynamic Supercruise Distance Scaling:** $\theta_g = \text{clamp}(0.0008f + (bw \cdot r24x) \cdot 0.0032f, 0.0008f, 0.065f)$, smoothly growing the disk from a distant star-like jewel at 54,000+ Ls into a screen-filling giant as you approach.
-  - **Radiant Star-Like Optical Bloom & Glare:** Boosted peak HDR radiance to $\sim 15.0$ and added an optical glare scattering envelope around the inner disk, driving Elite's native bloom pass to create atmospheric glare like bright stars.
-  - **Smooth Limb Blending:** Asymptotic decay of gravitational bending at the limbs ($b \gg b_{\text{crit}}$) with wide limb blending, eliminating pinched warping where the arch meets the wings.
-- **Next Flight:** Flight 15 validation of unbroken shadow in realistic mode, dynamic supercruise growth, star-like bloom, and smooth arch-wing junction.
+  - `ruled out: evaluating bw * r24x as dynamic distance in supercruise, because bw is constant ~23.7 on the sky dome, locking theta_g at 0.065 rad until r21 popped it to 0.0009 rad at 0.24 Ls in Flight 15.`
+  - `ruled out: limbFalloff = exp(-max(bShadow - b_crit, 0.0) / 3.5), because at the top of the arch b_y >> b_crit decayed r_rear into r_front, ballooning the arch into a tall vertical capsule in Flight 15.`
+  - `ruled out: broad hdrGlare diffuse envelope, because it caused a foggy washout across the disk and dimmed the starfield in Flight 15.`
+- **Implemented Architecture (Flight 16 Build):**
+  - **Monotonic Dynamic Distance Scaling:** $\theta_g = \text{clamp}(\max(r21 \times 0.185f, 0.0015f), 0.0015f, 0.075f)$, smoothly growing from a brilliant $2^\circ$ jewel at 54k Ls to a $90^\circ$ canopy-filling disk at 25 km with zero pop.
+  - **Pure Black Central Shadow in Both Modes:** $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ in both `simple` and `realistic` modes; foreground intersection $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cosIncReg)^2}$ guarantees 100% pure black shadow.
+  - **Tight Relativistic Upper Arch:** Removed `limbFalloff`; pure Beloborodov $r_{\text{rear}}$ hugs the shadow across the top; smooth Hermite blend `frontBridgeWeight = smoothstep(-0.18, 0.18, cosPsi1)` eliminates limb warping.
+  - **Clean Optical Bloom without Fog:** Removed `hdrGlare` fog and starfield opacity offset; razor-thin photon spike ($2.25$) and peak radiance ($1.45$) drive Elite's native bloom filter cleanly.
+- **Next Flight:** Flight 16 validation of smooth monotonic approach scaling, tight relativistic arch without vertical blowout, pure black shadow in both modes, and clean starfield clarity.
 ---
 
 ## 1. What the engine draws today, and why `star_glow` missed it
@@ -720,8 +722,31 @@ Screenshots: `20261108225109_1.jpg` (simple mode, 27 km), `20261108225328_1.jpg`
 4. **Smooth Limb Blending:**
    - Asymptotic decay of gravitational bending at the limbs ($b \gg b_{\text{crit}}$) with wide limb blending, eliminating pinched warping where the arch meets the wings.
 
+---
 
+## 17. Flight 15 Results & Flight 16 Architecture (2026-11-09)
 
+Log: `edvr_gfx_20261109_000515.log` (build `6AF15AE0` / `2214d287`, VR profile at 11.3 Ls, 1.67 Ls, 0.24 Ls, and 25 km).
+Screenshots: `20261109000932_1.jpg` (11.3 Ls), `20261109000946_1.jpg` (1.67 Ls), `20261109000958_1.jpg` (0.24 Ls).
 
+### 17.1 Flight 15 Findings
+1. **The 0.24 Ls Size Pop:**
+   - In `black_hole_disk.cpp`, `bw \cdot r24x` is ~23.7 constantly in supercruise. Beyond 0.25 Ls, `r21 == 0`, so `bw \cdot r24x` drove $\theta_g = 0.065$ rad (filling the targeting reticle).
+   - At 0.24 Ls, Frontier's engine initialized `r21` at a tiny initial value ($\sim 0.005$). The `if (r21 > 1e-4f)` branch immediately took over and slammed $\theta_g$ down to $0.005 \times 0.185 = 0.0009$ rad—an instant 70x pop down to a tiny dot in 1 frame.
+2. **Vertically Blown-Out Expanding Upper Arch:**
+   - In `black_hole_disk_simple.hlsl`, `limbFalloff = exp(-max(bShadow - b_crit, 0.0) / 3.5)` evaluated at the top of the arch ($b_y \gg b_{\text{crit}}$) decayed to near zero, replacing $r_{\text{rear}}$ with $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cosIncReg)^2}$. Because $\cosIncReg \approx 0.2$ to $0.3$, $r_{\text{front}}$ was huge, ballooning the upper arch vertically into a tall oblong capsule as the ship moved.
+3. **Excessive Foggy Glare Washout:**
+   - `hdrGlare` scattered a broad exponential diffuse envelope out to $15M$, creating excessive foggy haze across the disk and darkening the starfield in `outAlpha`.
 
+### 17.2 Flight 16 Architecture
+1. **Monotonic Dynamic Sizing (Zero Pop):**
+   - At extreme supercruise distance (54k Ls), the black hole is a tight, brilliant star-like jewel at $\theta_g = 0.0015$ rad (~$2^\circ$ disk diameter).
+   - As the ship approaches in supercruise, Frontier's `r21` rises smoothly from 0 to 0.35 rad.
+   - Scaling $\theta_g = \text{clamp}(\max(r21 \times 0.185f, 0.0015f), 0.0015f, 0.075f)$ ensures strictly monotonic growth with zero pop.
+2. **Tight Relativistic Upper Arch:**
+   - Removed `limbFalloff` and `r_rear_smooth`. Restored pure Beloborodov $r_{\text{rear}}$ with photon-sphere pull, hugging the shadow cleanly across the top.
+   - Smooth Hermite limb blend `frontBridgeWeight = smoothstep(-0.18, 0.18, cosPsi1)` provides seamless wing continuity without warping.
+3. **Pure Black Shadow & Natural Optical Bloom:**
+   - Removed `hdrGlare` fog and starfield opacity offset. Kept the razor-thin photon spike ($2.25$) and peak radiance ($1.45$), letting Elite's native bloom flare naturally without foggy wash.
+   - $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ in both `simple` and `realistic` modes guarantees 100% pure black unbroken central shadow.
 

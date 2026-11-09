@@ -286,12 +286,10 @@ float4 PSMain(VSOutput input) : SV_TARGET
         r_rear = lerp(r_rear, r_isco + (bShadow - b_crit) * 1.55, archPull * (-cosPsi1));
     }
 
-    // Smooth limb blending (zero pinching/warping at the arch-wing junction):
-    // In weak-field space (bShadow >> b_crit), gravitational bending decays to zero,
-    // so the rear bent image smoothly converges to the flat Euclidean plane r_front.
-    float limbFalloff = exp(-max(bShadow - b_crit, 0.0) / 3.5);
-    float r_rear_smooth = lerp(r_front, r_rear, limbFalloff);
-    float limbBlend = smoothstep(-0.25, 0.25, cosPsi1);
+    // Smooth, continuous bridge blending between foreground disk plane and rear bent arch across the limbs:
+    // A smooth Hermite transition across cosPsi1 in [-0.18, 0.18] guarantees zero warping or crease where
+    // the front bridge meets the bent arch wings:
+    float frontBridgeWeight = smoothstep(-0.18, 0.18, cosPsi1);
 
     // Determine effective radial emission coordinate r_direct:
     // Inside the shadow (bShadow < b_crit), light from behind the black hole is captured by the event horizon.
@@ -304,7 +302,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
     }
     else
     {
-        r_direct = lerp(r_rear_smooth, r_front, limbBlend);
+        r_direct = lerp(r_rear, r_front, frontBridgeWeight);
     }
 
     // Visibility rule for Sheet 1:
@@ -314,7 +312,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
     //   in front of the black hole. Where r_front >= r_isco, the glowing disk is visible in front of the shadow.
     //   Where r_front < r_isco, DiskEmissionProfile(r_front) returns 0, preserving 100% pure black shadow!
     float outsideShadowWeight = smoothstep(b_crit * 0.96, b_crit * 1.03, bShadow);
-    float vis1 = lerp(outsideShadowWeight, 1.0, limbBlend);
+    float vis1 = lerp(outsideShadowWeight, 1.0, frontBridgeWeight);
 
     float emission1 = DiskEmissionProfile(r_direct, r_isco, r_out);
     float3 hdr1 = float3(0.0, 0.0, 0.0);
@@ -334,7 +332,7 @@ float4 PSMain(VSOutput input) : SV_TARGET
         float T_norm1 = pow(max(r_isco / max(r_direct, 0.1), 0.0), 0.55) * g1;
         float3 col1 = AccretionTemperatureToRGB(T_norm1, mode, peakTempK);
 
-        float I1 = emission1 * boost1 * turb1 * 2.15; // Enhanced peak HDR radiance for glorious optical bloom
+        float I1 = emission1 * boost1 * turb1 * 1.45;
         hdr1 = col1 * I1 * vis1;
         opacity1 = saturate(emission1 * turb1 * vis1 * 1.45);
     }
@@ -415,20 +413,13 @@ float4 PSMain(VSOutput input) : SV_TARGET
     // Thin Relativistic Photon Ring at bShadow = b_crit (occluded where front disk crosses!)
     // =========================================================================
     float deltaCrit = abs(bShadow - b_crit);
-    float photonSpike = exp(-deltaCrit * deltaCrit / 0.008) * 3.65;
+    float photonSpike = exp(-deltaCrit * deltaCrit / 0.008) * 2.25;
     // Doppler asymmetry along the photon ring: brighter on approaching (bx < 0) side
-    float ringDoppler = clamp(1.0 - 0.45 * sinIncMag * (bx / max(b, 0.5)), 0.45, 1.65);
-    float3 photonRingCol = (mode > 1.5) ? float3(2.25, 3.10, 4.85) : float3(3.85, 2.75, 1.25);
+    float ringDoppler = clamp(1.0 - 0.40 * sinIncMag * (bx / max(b, 0.5)), 0.50, 1.55);
+    float3 photonRingCol = (mode > 1.5) ? float3(1.85, 2.45, 3.85) : float3(2.65, 1.95, 0.95);
     // Front disk bridge attenuates the background photon ring behind it:
-    float behindFrontDisk = 1.0 - saturate(opacity1 * limbBlend * 0.90);
+    float behindFrontDisk = 1.0 - saturate(opacity1 * frontBridgeWeight * 0.90);
     float3 hdrPhoton = photonRingCol * photonSpike * ringDoppler * behindFrontDisk;
-
-    // Optical canopy glare & light bloom envelope (astrophysical scattering from ultra-luminous inner disk):
-    // Drives Elite's post-processing bloom pyramid to generate a radiant star-like aura around the black hole!
-    float shadowMask = (bShadow < b_crit) ? 1.0 : 0.0;
-    float glareDist = max(0.0, bShadow - b_crit * 0.95);
-    float glareFalloff = exp(-glareDist * glareDist / max(r_out * 0.75, 1.0)) * 0.85;
-    float3 hdrGlare = photonRingCol * glareFalloff * ringDoppler * (1.0 - shadowMask);
 
     // Composite Front-over-Back: primary sheet occludes secondary lower arch behind it
     float3 secondaryHdr = hdrLower + hdrKerr;
@@ -436,12 +427,13 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float3 diskHdr = hdr1 + secondaryHdr * (1.0 - opacity1 * 0.90);
     float diskOpacity = saturate(opacity1 + secondaryOpacity * (1.0 - opacity1));
 
-    float3 totalHdr = diskHdr + hdrPhoton + hdrGlare;
+    float3 totalHdr = diskHdr + hdrPhoton;
 
     // Event Horizon Shadow Mask inside bShadow < b_crit:
     // Black hole shadow extinguishes background stars (outAlpha = 1.0), while allowing
     // the front equatorial disk bridge (hdr1 where cosPsi1 > 0) to shine across the front of the shadow!
-    float outAlpha = (shadowMask > 0.5) ? 1.0 : saturate(diskOpacity + photonSpike * 0.35 + glareFalloff * 0.25);
+    float shadowMask = (bShadow < b_crit) ? 1.0 : 0.0;
+    float outAlpha = (shadowMask > 0.5) ? 1.0 : saturate(diskOpacity + photonSpike * 0.35);
 
     // Discard if completely dark and outside the shadow to preserve depth and performance
     if (dot(totalHdr, float3(1, 1, 1)) < 0.0002 && shadowMask < 0.5)

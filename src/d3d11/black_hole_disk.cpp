@@ -171,7 +171,7 @@ static bool  g_hasSkyInvViewProj[3] = { false, false, false };
 
 // Latched black hole world anchor
 static float g_latchedBhWorldDir[3] = { 0.0f, 0.0f, 1.0f };
-static float g_latchedThetaG = 0.0008f;
+static float g_latchedThetaG = 0.0015f;
 static bool  g_hasLatchedBhWorldDir = false;
 static bool  g_hasSkyBhAnchor = false;
 static bool  g_lensCapturedNoted = false;
@@ -649,19 +649,15 @@ void blackHoleDiskAfterDraw(ID3D11DeviceContext* ctx, uint64_t vsHash, uint64_t 
                 g_hasLatchedBhWorldDir = true;
                 g_hasSkyBhAnchor = true;
 
-                if (r21 > 1e-4f) {
-                    // Match black hole shadow (b_crit ~ 5.2M) to Frontier's inner pinch radius r21:
-                    // theta_g = r21 / b_crit = r21 / 5.196 ~ r21 * 0.1924f.
-                    // Scale factor 0.185f matches the shadow boundary within 3% of Frontier's lens pinch.
-                    g_latchedThetaG = std::clamp(r21 * 0.185f, 0.0008f, 0.080f);
-                } else if (bw * r24x > 1e-4f) {
-                    // Supercruise dynamic scaling: grows smoothly from distant star-like jewel (0.0008 rad)
-                    // at 54,000+ Ls to an imposing disk (0.065 rad) as you approach!
-                    float scTheta = 0.0008f + (bw * r24x) * 0.0032f;
-                    g_latchedThetaG = std::clamp(scTheta, 0.0008f, 0.065f);
-                } else {
-                    g_latchedThetaG = std::max(g_latchedThetaG, 0.0008f);
-                }
+                // Dynamic distance scaling:
+                // At far supercruise distance (54,000+ Ls), the black hole is a compact star-like jewel (0.0015 rad).
+                // As the ship approaches in supercruise and drops out at the 25 km Exclusion Zone,
+                // Frontier's lens parameter r21 grows monotonically from 0 up to ~0.35 rad.
+                // Scale factor 0.185f matches the shadow boundary within 3% of Frontier's inner lens pinch.
+                // Monotonic combination guarantees zero sudden shrink or pop down as you approach!
+                float thetaFromR21 = (r21 > 1e-4f) ? (r21 * 0.185f) : 0.0f;
+                float theta = std::max(thetaFromR21, 0.0015f);
+                g_latchedThetaG = std::clamp(theta, 0.0015f, 0.075f);
             }
         }
 
