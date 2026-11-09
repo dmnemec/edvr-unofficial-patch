@@ -2,7 +2,7 @@
 
 ## Status
 
-- **State: FLYING (`visual.black_hole_disk = off | simple | realistic`, Flight 16 Build).**
+- **State: FLYING (`visual.black_hole_disk = off | simple | realistic`, Flight 17 Build).**
 - **Goal:** Add visually striking, scientifically grounded black hole accretion
   disks (lensed upper/lower arches, central event-horizon shadow, photon ring,
   and relativistic Doppler beaming) to both the **VR** and **Flat** profiles.
@@ -23,14 +23,15 @@
   - `ruled out: clamping g_latchedThetaG to 0.036f (2.0 deg), because Frontier's inner pinch radius at the Exclusion Zone (25 km) is r21 = 0.347 rad (20 deg), making the disk 10x smaller than Frontier's gravitational lens in Flight 13.`
   - `ruled out: setting r_isco = 3.8M < 4.65M = b_crit in realistic mode, because emission inside the shadow radius caused the same inner-circle overlap in Flight 14.`
   - `ruled out: evaluating bw * r24x as dynamic distance in supercruise, because bw is constant ~23.7 on the sky dome, locking theta_g at 0.065 rad until r21 popped it to 0.0009 rad at 0.24 Ls in Flight 15.`
-  - `ruled out: limbFalloff = exp(-max(bShadow - b_crit, 0.0) / 3.5), because at the top of the arch b_y >> b_crit decayed r_rear into r_front, ballooning the arch into a tall vertical capsule in Flight 15.`
-  - `ruled out: broad hdrGlare diffuse envelope, because it caused a foggy washout across the disk and dimmed the starfield in Flight 15.`
-- **Implemented Architecture (Flight 16 Build):**
-  - **Monotonic Dynamic Distance Scaling:** $\theta_g = \text{clamp}(\max(r21 \times 0.185f, 0.0015f), 0.0015f, 0.075f)$, smoothly growing from a brilliant $2^\circ$ jewel at 54k Ls to a $90^\circ$ canopy-filling disk at 25 km with zero pop.
-  - **Pure Black Central Shadow in Both Modes:** $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ in both `simple` and `realistic` modes; foreground intersection $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cosIncReg)^2}$ guarantees 100% pure black shadow.
-  - **Tight Relativistic Upper Arch:** Removed `limbFalloff`; pure Beloborodov $r_{\text{rear}}$ hugs the shadow across the top; smooth Hermite blend `frontBridgeWeight = smoothstep(-0.18, 0.18, cosPsi1)` eliminates limb warping.
-  - **Clean Optical Bloom without Fog:** Removed `hdrGlare` fog and starfield opacity offset; razor-thin photon spike ($2.25$) and peak radiance ($1.45$) drive Elite's native bloom filter cleanly.
-- **Next Flight:** Flight 16 validation of smooth monotonic approach scaling, tight relativistic arch without vertical blowout, pure black shadow in both modes, and clean starfield clarity.
+  - `ruled out: y_disk_plane = by * cosIncSigned / (cosIncSigned^2 + 0.08^2), because its 156x derivative at cosIncSigned = 0 caused a pop when crossing the equatorial plane in Flight 16.`
+  - `ruled out: independent 4M-wide Sheet 2 double-drawn below the shadow, which made the lower crescent wider than the upper arch when above the disk in Flight 16.`
+  - `ruled out: unconstrained r_rear formula and diffuse Kerr LUT spanning 11M on screen, which blew the realistic mode upper arch into a giant white wall in Flight 16.`
+- **Implemented Architecture (Flight 17 Build):**
+  - **Bounded Majestic Primary Arch:** Primary arch thickness strictly bounded to $\Delta b_{\text{apex}} = 2.45M$ ($2.15M$ in `realistic`), hugging the shadow at $\sim 45\%$ of shadow radius and fanning out smoothly to $r_{\text{out}} = 20M$ at the wings.
+  - **Delicate Secondary Crescent ($n=1$):** Secondary crescent compressed to $\Delta b = 0.42M$, ensuring the primary arch is prominently on TOP when above the disk.
+  - **Zero-Pop $C^\infty$ Equatorial Plane Crossing:** Unflipped ellipse $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cosIncReg)^2}$ and smooth top/bottom thickness interpolation through $1.4M$ at edge-on eliminate plane-crossing pop.
+  - **Kerr Sub-Ring Filament:** $n=2$ Kerr photon sub-ring restricted to an ultra-thin $\Delta b \le 0.30M$ filament, preserving Planckian blue-white radiance without white wall blowout.
+- **Next Flight:** Flight 17 validation of prominent top arch when above disk, zero pop when crossing disk plane, tight relativistic realistic arch, and pure black shadow.
 ---
 
 ## 1. What the engine draws today, and why `star_glow` missed it
@@ -749,4 +750,31 @@ Screenshots: `20261109000932_1.jpg` (11.3 Ls), `20261109000946_1.jpg` (1.67 Ls),
 3. **Pure Black Shadow & Natural Optical Bloom:**
    - Removed `hdrGlare` fog and starfield opacity offset. Kept the razor-thin photon spike ($2.25$) and peak radiance ($1.45$), letting Elite's native bloom flare naturally without foggy wash.
    - $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ in both `simple` and `realistic` modes guarantees 100% pure black unbroken central shadow.
+
+---
+
+## 18. Flight 16 Results & Flight 17 Architecture (2026-11-09)
+
+Log: `edvr_gfx_20261109_111328.log` (build `6AF1681D` / `7494edab`, VR profile at 26.0 km).
+Screenshots: `20261109111548_1.jpg` (simple mode, 26 km), `20261109112526_1.jpg` (realistic mode, 26 km).
+
+### 18.1 Flight 16 Findings
+1. **Primary Arch Orientation & Lower Crescent Thickness (Issue 1):**
+   - In `20261109111548_1.jpg`, when above the disk (`cosIncSigned > 0`), Sheet 2 (`hdrLower`) rendered an unphysically wide $4M$ crescent below the shadow. Layered with the foreground flat disk plane, the lower side appeared wider and more prominent than the upper arch, making it look as though the main wrapping arch was on the wrong (bottom) side.
+2. **Pop When Crossing Disk Plane (Issue 2):**
+   - $y_{\text{disk\_plane}} = \frac{b_y \cdot \text{tiltSign}}{\cosIncReg} = \frac{b_y \cdot \cosIncSigned}{\cosIncSigned^2 + 0.08^2}$ had a derivative of $156 \times$ at $\cosIncSigned = 0$. A minute change of $0.01$ swung $y_{\text{disk\_plane}}$ rapidly across $1.56 \times b_y$, causing a noticeable pop in the disk plane coordinates as the player crossed the equatorial plane.
+3. **Realistic Mode Arch Blown Out (Issue 3):**
+   - In `20261109112526_1.jpg`, `realistic` mode stacked Sheet 1, Sheet 2, and Sheet 3 (Kerr LUT) with unconstrained radial spread. Beloborodov's $r_{\text{rear}}$ formula extended to $b = 16M$, blowing the upper arch out to more than $100\%$ of the shadow radius ($11M$ tall), while the LUT added a wide diffuse white layer over the entire apex.
+
+### 18.2 Flight 17 Architecture
+1. **Clean Primary vs. Secondary Relativistic Arch Separation:**
+   - Upper arch thickness is strictly bounded to $\Delta b_{\text{apex}} = 2.45M$ in `simple` mode ($2.15M$ in `realistic`), hugging the shadow at $\sim 45\%$ of the shadow radius, exactly matching the iconic Gargantua geometry.
+   - Secondary arch is strictly a thin $0.42M$ crescent ($e^{-\pi}$ compression).
+   - When above the disk, the primary arch is prominently and unmistakably on TOP.
+2. **Zero-Pop $C^\infty$ Equatorial Plane Crossing:**
+   - Evaluated the foreground disk ellipse as $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cosIncReg)^2}$ without any sign flip in the denominator.
+   - Blended primary and secondary arch thicknesses smoothly via $w_{\text{top\_is\_primary}} = 0.5 + 0.5 \cdot \text{clamp}(\cosIncSigned / 0.22, -1, 1)$, ensuring exact up/down symmetry at $\cosIncSigned = 0$ with zero pop across the plane.
+3. **Realistic Mode Kerr Sub-Ring Tightening:**
+   - Kerr $n=2$ sub-ring is restricted to an ultra-thin $\Delta b \le 0.30M$ filament right outside $b_{\text{crit}}$, giving authentic Kerr blue-white Planckian radiance without blowing out into a giant white wall.
+
 

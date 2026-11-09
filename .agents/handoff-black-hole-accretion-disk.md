@@ -54,32 +54,31 @@
 
 ---
 
-## 3. What Was Just Built & Installed (Ready for Flight 16 Verification)
+## 3. What Was Just Built & Installed (Ready for Flight 17 Verification)
 
 The current working tree on `feat/black-hole-accretion-disk` has passed the full validation build (`build.bat --wait-lock`) and is installed on the Steam target (`D:\SteamLibrary\steamapps\common\Elite Dangerous\Products\elite-dangerous-odyssey-64`).
 
-### Changes in Flight 16 Build (Post-Flight 15 Feedback)
-1. **Monotonic Dynamic Distance Scaling (Zero Pop):** Removed the broken `if/else if` branch between `r21` and `bw * r24x` that caused the disk to pop 70x down from 0.065 to 0.0009 at 0.24 Ls. Replaced with strictly monotonic $\theta_g = \text{clamp}(\max(r21 \times 0.185f, 0.0015f), 0.0015f, 0.075f)$, smoothly growing from a compact $2^\circ$ jewel at 54,000+ Ls into an imposing $90^\circ$ canopy-filling disk at 25 km.
-2. **Tight Relativistic Upper Arch (Zero Vertical Ballooning):** Removed `limbFalloff` and `r_rear_smooth`, which had decayed $r_{\text{rear}}$ into $r_{\text{front}}$ at the top of the arch ($b_y \gg b_{\text{crit}}$) and blown the arch out vertically into a tall oblong capsule. Restored pure Beloborodov $r_{\text{rear}}$ with photon-sphere pull, hugging the shadow tightly across the top.
-3. **Smooth Hermite Limb Blending:** Transition across the wings uses `frontBridgeWeight = smoothstep(-0.18, 0.18, cosPsi1)`, ensuring seamless, continuous connection between foreground disk and rear arch without creases or warping.
-4. **Clean Optical Bloom without Fog:** Removed `hdrGlare` fog and starfield opacity offset. Kept the razor-thin photon spike ($2.25$) and peak radiance ($1.45$), letting Elite's native bloom filter flare naturally without foggy wash over the disk.
-5. **Pure Black Shadow in Both Modes:** $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ in both `simple` and `realistic` modes guarantees 100% pure black unbroken central shadow.
+### Changes in Flight 17 Build (Post-Flight 16 Feedback)
+1. **Primary Arch Prominently on Top When Above Disk:** Eliminated the double-drawn $4M$-wide lower crescent that made the lower side appear wider than the upper arch. Unified primary arch ($\Delta b = 2.45M$) and secondary crescent ($\Delta b = 0.42M$) so that when above the disk, the primary arch is prominently and unmistakably towering on TOP of the black hole.
+2. **Zero-Pop $C^\infty$ Equatorial Plane Crossing:** Replaced the steep $156 \times$ derivative in $y_{\text{disk\_plane}}$ with the continuous ellipse $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cosIncReg)^2}$. Top and bottom arch thicknesses smoothly interpolate through $1.4M$ at edge-on ($\cosIncSigned = 0$), completely eliminating the pop when flying through the disk plane.
+3. **Tight, Non-Blown-Out Realistic Mode Arch:** Primary arch thickness in `realistic` mode is strictly bounded to $\Delta b_{\text{apex}} = 2.15M$. The Kerr $n=2$ sub-ring is restricted to an ultra-thin $\Delta b \le 0.30M$ filament, preserving Planckian blue-white core radiance without blowing out into an oversized white wall.
+4. **100% Pure Black Unbroken Shadow:** $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ preserved across both `simple` and `realistic` modes.
 
 ---
 
 ## 4. Next Steps for the Next Agent
 
-1. **After Flight 16:**
+1. **After Flight 17:**
    - Verify the flight log matches the build:
      ```powershell
      python tools\edvr_log.py --target steam --expect-build HEAD --version
      python tools\edvr_log.py --target steam --grep "black hole"
      ```
    - Check user feedback on:
-     - Approach in supercruise: verify smooth, monotonic growth from a brilliant jewel at 54,000 Ls to a giant disk at 25 km with zero pop down at 0.24 Ls.
-     - Upper arch: verify tight relativistic arch hugging the shadow without ballooning or expanding vertically.
-     - Glare/Bloom: verify clean disk details with natural optical bloom and zero foggy washout.
-     - Both modes (`simple` and `realistic`): verify 100% pure black unbroken central shadow.
+     - Arch orientation: verify the large, wide wrapping arch is on TOP when above the disk.
+     - Crossing the disk plane: verify zero pop when flying through the disk's equatorial plane.
+     - Realistic mode arch: verify the upper arch is tight, well-proportioned ($\sim 45\%$ of shadow radius), and not blown out.
+     - Central shadow: verify 100% pure black unbroken center in both modes.
 2. **When Editing the Shader (`src/shaders/black_hole_disk_simple.hlsl`):**
    - Always recompile `src/d3d11/black_hole_disk_shader.h` using `fxc.exe` with `/Vn kBlackHoleDiskSimpleVS` (entry `VSMain`, `/T vs_5_0 /O3`) and `/Vn kBlackHoleDiskSimplePS` (entry `PSMain`, `/T ps_5_0 /O3`) wrapped in `namespace edvr { ... }`, then run the full `build.bat --wait-lock` by absolute path.
 

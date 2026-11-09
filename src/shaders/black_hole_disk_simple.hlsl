@@ -229,72 +229,77 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float sinIncMag = sqrt(max(0.0, 1.0 - cosIncSigned * cosIncSigned));
 
     // Smooth, C^infinity grazing-angle regularizer for |cos(i)|:
-    // Approaches |cosIncSigned| for |cosIncSigned| >> 0.08, and smoothly rounds to 0.08 at exact edge-on (cosIncSigned = 0)
+    // Approaches |cosIncSigned| for |cosIncSigned| >> 0.12, and smoothly rounds to 0.12 at exact edge-on (cosIncSigned = 0)
     // WITHOUT any sign flip, so crossing the equatorial plane from top to bottom has ZERO pop!
-    float cosIncReg = sqrt(cosIncSigned * cosIncSigned + 0.08 * 0.08);
+    float cosIncReg = sqrt(cosIncSigned * cosIncSigned + 0.12 * 0.12);
 
-    // Signed vertical coordinate relative to which side of the disk faces the observer:
-    //   When cosIncSigned > 0 (above disk): the front bridge is at by < 0 (y_front < 0) and the bent rear arch is at by > 0.
-    //   When cosIncSigned < 0 (below disk): the front bridge smoothly moves to by > 0 and the bent rear arch to by < 0.
-    //   At cosIncSigned = 0 (exact edge-on): symmetric upper & lower Einstein arches with the disk edge-on across the middle!
-    float tiltSign = cosIncSigned / cosIncReg; // Smoothly varies in (-1, +1) through 0 with zero discontinuity!
-    float byOriented = by * tiltSign;
-
-    // Kerr frame-dragging shadow displacement (Bardeen 1973):
-    // In realistic mode (a* = 0.85), prograde photons on the approaching side (bx < 0) can orbit closer
-    // while retrograde photons (bx > 0) are captured further out, shifting the shadow center slightly by +0.35 * a_spin * sinIncMag:
     float bxShadow = bx;
     float bShadow  = length(float2(bxShadow, by));
 
-    // =========================================================================
-    // SHEET 1 (n = 0 Primary Geodesic Image: Front Bridge + Bent Rear Arch!)
-    // =========================================================================
-    // A photon travelling in the orbital plane spanned by (-d_bh, e2) crosses the equatorial disk plane when:
-    //   n_dot_neg_dbh = cosIncReg > 0
-    //   n_dot_e2      = -sinIncMag * (byOriented / b)
-    float n_dot_neg_dbh = cosIncReg;
-    float n_dot_e2      = -sinIncMag * (byOriented / max(b, 1e-4));
-    float psiNorm       = length(float2(n_dot_neg_dbh, n_dot_e2));
-    float cosPsi1       = n_dot_e2 / max(psiNorm, 1e-5);     // > 0 on front half, < 0 on rear/arched half
-    float sinPsi1       = n_dot_neg_dbh / max(psiNorm, 1e-5); // > 0 everywhere
+    // Screen-angle decomposition relative to the disk's projected spin axis:
+    // sinPhi = +1.0 directly along diskUp (top apex), -1.0 directly along -diskUp (bottom apex)
+    // cosPhi = +/-1.0 directly along diskRight (horizontal wings)
+    float sinPhi = by / max(bShadow, 1e-4);
+    float cosPhi = bx / max(bShadow, 1e-4);
+    float sin2Phi = sinPhi * sinPhi;
+    float cos2Phi = cosPhi * cosPhi;
 
-    // True 3D world direction of the equatorial disk hit point (using continuous signed inclination):
-    float3 hitDir1 = normalize(-cosPsi1 * d_bh + sinPsi1 * e2);
+    // True physical 3D hit direction for procedural noise & turbulence on the equatorial disk plane:
+    float3 hitDir1 = normalize(-sinPhi * diskUp + cosPhi * diskRight);
     float3 hitInPlane1 = hitDir1 - dot(hitDir1, n_disk) * n_disk;
     float phi1 = atan2(dot(hitInPlane1, v_disk), dot(hitInPlane1, u_disk));
 
-    // True physical radial distance on the tilted equatorial accretion disk plane (front bridge):
-    // In front of the black hole, the observer looks directly at the equatorial disk plane before
-    // the line of sight reaches the black hole. The radial coordinate is the smooth ellipse:
-    //   r_front = sqrt(bx^2 + (byOriented / cosIncReg)^2).
-    // Inside the disk's central hole (r_front < r_isco), DiskEmissionProfile(r_front) is IDENTICALLY ZERO.
-    // This eliminates the artificial horizontal cut/shelf and preserves a pure black event horizon shadow!
-    float y_disk_plane = byOriented / cosIncReg;
-    float r_front = sqrt(bx * bx + y_disk_plane * y_disk_plane);
+    // =========================================================================
+    // 1. FOREGROUND DISK PLANE (Crossing in Front of the Shadow)
+    // =========================================================================
+    // In front of the black hole, the line of sight intersects the tilted equatorial plane (Z = 0):
+    // r_front = sqrt(bx^2 + (by / cosIncReg)^2).
+    // Because cosIncReg is strictly positive and non-zero everywhere, r_front is C^infinity continuous!
+    // As edge-on is approached (|cosIncSigned| -> 0), points off the midline naturally have r_front > r_out,
+    // so the disk smoothly and gracefully flattens into a razor-thin line across the center with ZERO pop!
+    float y_plane = by / cosIncReg;
+    float r_front = sqrt(bx * bx + y_plane * y_plane);
 
-    // Exact Beloborodov (2002) / Schwarzschild-Kerr light-bending for Rear Bent Arch (cosPsi1 < 0):
-    // Light emitted from behind the black hole bends over the top of the event horizon.
-    float r_lens = (mode > 1.5) ? 1.85 : 2.00;
-    float ratio1 = (1.0 + cosPsi1) / max(1.0 - cosPsi1, 1e-4);
-    float r_rear = (r_lens + sqrt(r_lens * r_lens + bShadow * bShadow * ratio1)) / max(1.0 + cosPsi1, 0.06);
+    // Determines whether a ray looks toward the foreground side of the disk or background lensed arch:
+    // When observer is above disk (cosIncSigned > 0), foreground disk is at by < 0 (bottom).
+    // When observer is below disk (cosIncSigned < 0), foreground disk is at by > 0 (top).
+    // Thus foreground side is unconditionally: -by * cosIncSigned > 0:
+    float mu_side = (-by * cosIncSigned) / max(bShadow * cosIncReg, 0.06);
+    float frontBridgeWeight = smoothstep(-0.16, 0.16, mu_side);
 
-    // Near the photon sphere (bShadow -> b_crit on the rear side cosPsi1 < 0), pull the inner edge of the
-    // bent rear arch smoothly down to r_isco right outside b_crit so the entire disk wraps over the shadow:
-    if (cosPsi1 < 0.0 && bShadow > b_crit)
-    {
-        float archPull = exp(-max(bShadow - b_crit, 0.0) / 1.8);
-        r_rear = lerp(r_rear, r_isco + (bShadow - b_crit) * 1.55, archPull * (-cosPsi1));
-    }
+    // =========================================================================
+    // 2. RELATIVISTIC LENSED ARCHES (Primary Majestic Arch + Secondary Crescent)
+    // =========================================================================
+    // Which hemisphere of the sky contains the primary lensed arch vs secondary crescent?
+    // When cosIncSigned > 0 (above disk): primary arch is at the top (by > 0), secondary at bottom (by < 0).
+    // When cosIncSigned < 0 (below disk): primary arch is at the bottom (by < 0), secondary at top (by > 0).
+    // At cosIncSigned = 0 (edge-on): both arches are completely symmetric!
+    float topIsPrimary = 0.5 + 0.5 * clamp(cosIncSigned / 0.22, -1.0, 1.0);
+    float isTop = smoothstep(-0.06, 0.06, by);
+    float primaryArchWeight = lerp(1.0 - topIsPrimary, topIsPrimary, isTop);
 
-    // Smooth, continuous bridge blending between foreground disk plane and rear bent arch across the limbs:
-    // A smooth Hermite transition across cosPsi1 in [-0.18, 0.18] guarantees zero warping or crease where
-    // the front bridge meets the bent arch wings:
-    float frontBridgeWeight = smoothstep(-0.18, 0.18, cosPsi1);
+    // Relativistic lensed thickness of the primary arch:
+    // At apex (sin2Phi = 1): arch thickness is deltaB_apex (majestic ~2.4M, hugging the shadow tightly).
+    // At wings (cos2Phi = 1): arch smoothly fans out to (r_out - b_crit) to merge seamlessly with the outer disk.
+    float deltaB_apex = (mode > 1.5) ? 2.15 : 2.45;
+    float deltaB_primary = deltaB_apex * sin2Phi + (r_out - b_crit) * cos2Phi;
+    float deltaB = max(bShadow - b_crit, 0.0);
+    float r_primary = r_isco + (deltaB / max(deltaB_primary, 0.15)) * (r_out - r_isco);
 
-    // Determine effective radial emission coordinate r_direct:
+    // Secondary lensed crescent (n = 1):
+    // In general relativity, n = 1 image is compressed by exp(-pi) ~ 1/23.
+    // It is a thin, delicate crescent hugging the opposite rim of the shadow:
+    float deltaB_secondary = 0.42 * sin2Phi + (r_out - b_crit) * 0.25 * cos2Phi;
+    float r_secondary = r_isco + (deltaB / max(deltaB_secondary, 0.05)) * (r_out - r_isco);
+
+    // Smoothly blend primary arch on the dominant side and secondary crescent on the opposite side:
+    // At edge-on (cosIncSigned = 0), both sides have equal symmetric intermediate thickness.
+    float r_lensed = lerp(r_secondary, r_primary, primaryArchWeight);
+
+    // Effective radial emission coordinate:
     // Inside the shadow (bShadow < b_crit), light from behind the black hole is captured by the event horizon.
     // Therefore, any emission inside the shadow can ONLY originate from the foreground disk plane (r_front).
-    // Outside the shadow (bShadow > b_crit), smoothly blend between the rear bent arch and front bridge:
+    // Outside the shadow (bShadow >= b_crit), smoothly blend foreground bridge into background lensed arch:
     float r_direct;
     if (bShadow < b_crit)
     {
@@ -302,13 +307,13 @@ float4 PSMain(VSOutput input) : SV_TARGET
     }
     else
     {
-        r_direct = lerp(r_rear, r_front, frontBridgeWeight);
+        r_direct = lerp(r_lensed, r_front, frontBridgeWeight);
     }
 
-    // Visibility rule for Sheet 1:
-    // - On the rear side of the disk (cosPsi1 < 0, wrapping over the back of the black hole), rays with bShadow < b_crit
+    // Visibility rule:
+    // - On the rear side of the disk (wrapping behind the black hole), rays with bShadow < b_crit
     //   pass inside the photon sphere and are occluded by the black hole shadow (outsideShadowWeight = 0).
-    // - On the front side of the disk (cosPsi1 >= 0, in front of the black hole), rays cross the equatorial plane
+    // - On the front side of the disk (in front of the black hole), rays cross the equatorial plane
     //   in front of the black hole. Where r_front >= r_isco, the glowing disk is visible in front of the shadow.
     //   Where r_front < r_isco, DiskEmissionProfile(r_front) returns 0, preserving 100% pure black shadow!
     float outsideShadowWeight = smoothstep(b_crit * 0.96, b_crit * 1.03, bShadow);
@@ -338,74 +343,31 @@ float4 PSMain(VSOutput input) : SV_TARGET
     }
 
     // =========================================================================
-    // SHEET 2 (n = 1 Secondary Geodesic Image: Lower/Opposite Lensed Arch)
+    // 3. REALISTIC MODE KERR n=2 PHOTON SUB-RING FILAMENT
     // =========================================================================
-    // Photons emitted from the underside of the disk bend by psi_2 = pi + psi_1 around the photon sphere
-    // and emerge just outside b_crit, wrapping around the opposite rim of the shadow:
-    float3 hdrLower = float3(0.0, 0.0, 0.0);
-    float opacityLower = 0.0;
-
-    if (bShadow > b_crit * 0.98)
-    {
-        // Secondary arch hugs b_crit all the way around, strongest on the side opposite the primary arch (byOriented < 0):
-        float lowerWeight = smoothstep(0.35 * b_crit, -0.15 * b_crit, byOriented);
-        float archWidth = 0.32 + 0.55 * max(-cosPsi1, 0.0) + 0.45 * max(cosPsi1, 0.0);
-        float r_lower = r_isco + max(bShadow - b_crit, 0.0) / max(archWidth * 0.28, 0.08);
-
-        float3 hitDir2 = -hitDir1;
-        float3 hitInPlane2 = hitDir2 - dot(hitDir2, n_disk) * n_disk;
-        float phi2 = atan2(dot(hitInPlane2, v_disk), dot(hitInPlane2, u_disk));
-
-        float emissionLower = DiskEmissionProfile(r_lower, r_isco, r_out) * lowerWeight;
-        if (emissionLower > 0.0005)
-        {
-            float beta2 = sqrt(1.0 / max(r_lower - a_spin, 1.4));
-            float v_los2 = -beta2 * sinIncMag * (bx / max(b, 0.35));
-            float gamma2 = 1.0 / sqrt(max(1.0 - beta2 * beta2, 0.02));
-            float gravRedshift2 = sqrt(max(1.0 - 1.5 / max(r_lower, 1.8), 0.05));
-            float g2 = clamp(gravRedshift2 / (gamma2 * max(1.0 - v_los2, 0.12)), 0.25, 1.85);
-
-            float turb2 = DiskStructureAndTurbulence(r_lower, phi2, timeSec, r_isco, a_spin);
-            float boost2 = pow(g2, 3.0);
-            float T_norm2 = pow(max(r_isco / max(r_lower, 0.1), 0.0), 0.55) * g2;
-            float3 col2 = AccretionTemperatureToRGB(T_norm2, mode, peakTempK);
-
-            float vis2 = smoothstep(b_crit * 0.98, b_crit * 1.04, bShadow);
-            float I2 = emissionLower * boost2 * turb2 * 1.05;
-            hdrLower = col2 * I2 * vis2;
-            opacityLower = saturate(emissionLower * turb2 * vis2 * 1.15);
-        }
-    }
-
-    // =========================================================================
-    // SHEET 3: Realistic Mode Kerr Geodesic LUT integration (n=2 Photon Sub-Ring)
-    // =========================================================================
-    // In generateGeodesicLut(), v_lut is parameterized by the 3D orbital bending angle psi_target in [0, pi],
-    // NOT raw screen angle atan2(by, bx)! Using psi1 = acos(cosPsi1) / pi aligns the LUT with the exact 3D
-    // disk plane without creating a second unforeshortened tilted disk!
+    // In realistic mode (a* = 0.85), higher-order geodesics form an ultra-thin,
+    // intense relativistic filament right outside the photon sphere (deltaB < 0.30M):
     float3 hdrKerr = float3(0.0, 0.0, 0.0);
     float opacityKerr = 0.0;
-    if (mode > 1.5 && bShadow > b_crit)
+    if (mode > 1.5 && bShadow > b_crit && bShadow < b_crit + 0.30)
     {
-        float psi1_angle = acos(clamp(cosPsi1, -1.0, 1.0));
-        float u_lut = clamp(sqrt(bShadow / 32.0), 0.0, 1.0);
-        float v_lut = clamp(psi1_angle / 3.1415926535, 0.0, 1.0);
-        float4 lutSample = GeodesicLut.SampleLevel(LinearClampSampler, float2(u_lut, v_lut), 0);
-        float r_kerr3 = lutSample.b;
-        if (r_kerr3 >= r_isco && r_kerr3 <= r_out)
+        float deltaB_kerr = bShadow - b_crit;
+        float r_kerr = r_isco + (deltaB_kerr / 0.30) * (r_out - r_isco);
+        float emKerr = DiskEmissionProfile(r_kerr, r_isco, r_out) * 0.65;
+        if (emKerr > 0.001)
         {
-            float beta3 = sqrt(1.0 / max(r_kerr3 - a_spin, 1.4));
-            float v_los3 = -beta3 * sinIncMag * (bx / max(b, 0.35));
-            float gamma3 = 1.0 / sqrt(max(1.0 - beta3 * beta3, 0.02));
-            float gravRedshift3 = sqrt(max(1.0 - 1.5 / max(r_kerr3, 1.8), 0.05));
-            float g3 = clamp(gravRedshift3 / (gamma3 * max(1.0 - v_los3, 0.12)), 0.25, 1.85);
+            float betaK = sqrt(1.0 / max(r_kerr - a_spin, 1.4));
+            float v_losK = -betaK * sinIncMag * (bx / max(b, 0.35));
+            float gammaK = 1.0 / sqrt(max(1.0 - betaK * betaK, 0.02));
+            float gravK = sqrt(max(1.0 - 1.5 / max(r_kerr, 1.8), 0.05));
+            float gK = clamp(gravK / (gammaK * max(1.0 - v_losK, 0.12)), 0.25, 1.85);
 
-            float turb3 = DiskStructureAndTurbulence(r_kerr3, phi1, timeSec, r_isco, a_spin);
-            float em3 = DiskEmissionProfile(r_kerr3, r_isco, r_out) * 0.45;
-            float T_norm3 = pow(max(r_isco / max(r_kerr3, 0.1), 0.0), 0.55) * g3;
-            float3 colKerr = AccretionTemperatureToRGB(T_norm3, mode, peakTempK);
-            hdrKerr = colKerr * em3 * pow(g3, 3.0) * turb3;
-            opacityKerr = saturate(em3 * turb3);
+            float turbK = DiskStructureAndTurbulence(r_kerr, phi1, timeSec, r_isco, a_spin);
+            float T_normK = pow(max(r_isco / max(r_kerr, 0.1), 0.0), 0.55) * gK;
+            float3 colK = AccretionTemperatureToRGB(T_normK, mode, peakTempK);
+
+            hdrKerr = colK * emKerr * pow(gK, 3.0) * turbK * 1.25;
+            opacityKerr = saturate(emKerr * turbK);
         }
     }
 
@@ -421,11 +383,9 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float behindFrontDisk = 1.0 - saturate(opacity1 * frontBridgeWeight * 0.90);
     float3 hdrPhoton = photonRingCol * photonSpike * ringDoppler * behindFrontDisk;
 
-    // Composite Front-over-Back: primary sheet occludes secondary lower arch behind it
-    float3 secondaryHdr = hdrLower + hdrKerr;
-    float secondaryOpacity = saturate(opacityLower + opacityKerr);
-    float3 diskHdr = hdr1 + secondaryHdr * (1.0 - opacity1 * 0.90);
-    float diskOpacity = saturate(opacity1 + secondaryOpacity * (1.0 - opacity1));
+    // Composite Front-over-Back: primary disk + Kerr photon sub-ring filament:
+    float3 diskHdr = hdr1 + hdrKerr * (1.0 - opacity1 * 0.90);
+    float diskOpacity = saturate(opacity1 + opacityKerr * (1.0 - opacity1));
 
     float3 totalHdr = diskHdr + hdrPhoton;
 
