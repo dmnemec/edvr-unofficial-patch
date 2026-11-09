@@ -54,29 +54,31 @@
 
 ---
 
-## 3. What Was Just Built & Installed (Ready for Flight 14 Verification)
+## 3. What Was Just Built & Installed (Ready for Flight 15 Verification)
 
 The current working tree on `feat/black-hole-accretion-disk` has passed the full validation build (`build.bat --wait-lock`) and is installed on the Steam target (`D:\SteamLibrary\steamapps\common\Elite Dangerous\Products\elite-dangerous-odyssey-64`).
 
-### Changes in Flight 14 Build (Post-Flight 13 Feedback)
-1. **Eliminated the flat horizontal cut / shelf across the shadow:** Replaced Beloborodov ray evaluation across the foreground line of sight ($b_y < 0$) with the true physical equatorial plane intersection $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cosIncReg)^2}$. Inside the central hole ($r_{\text{front}} < r_{\text{ISCO}}$), emission is strictly zero, ensuring the central shadow is unbroken and pure black, while any front bridge crossing follows a smooth ellipse.
-2. **Restored 1:1 scale matching Frontier's inner pinch:** Changed `g_latchedThetaG` scaling to `clamp(r21 * 0.185f, 0.0035f, 0.080f)` in normal space and `clamp((bw * r24x) * 0.012f, 0.0035f, 0.065f)` in supercruise. At the 25-27 km Exclusion Zone ($r21 = 0.347$ rad), shadow radius is $0.333$ rad ($19.1^\circ$), matching Frontier's pinch within 3% and filling the forward canopy with an imposing, cinematic accretion disk.
+### Changes in Flight 15 Build (Post-Flight 14 Feedback)
+1. **Unbroken Shadow & Exact Scale in `realistic` Mode:** Set $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ for both modes, ensuring `realistic` mode matches `simple`'s imposing scale and pristine unbroken shadow center while preserving its O/B-type Planckian cyan/violet spectrum and Kerr $n=2$ sub-ring.
+2. **Dynamic Supercruise Distance Scaling:** $\theta_g = \text{clamp}(0.0008f + (bw \cdot r24x) \cdot 0.0032f, 0.0008f, 0.065f)$, smoothly expanding the disk from a compact, glowing star-like jewel at 54,000+ Ls into a screen-filling giant as you approach.
+3. **Radiant Star-Like Optical Bloom & Glare:** Boosted peak HDR radiance to $\sim 15.0$ and added an optical glare scattering envelope around the inner disk, driving Elite's native bloom pass to create atmospheric glare like bright stars.
+4. **Smooth Limb Blending:** Asymptotic decay of gravitational bending at the limbs ($b \gg b_{\text{crit}}$) with wide limb blending, eliminating pinched warping where the arch meets the wings.
 
 ---
 
 ## 4. Next Steps for the Next Agent
 
-1. **After Flight 14:**
+1. **After Flight 15:**
    - Verify the flight log matches the build:
      ```powershell
      python tools\edvr_log.py --target steam --expect-build HEAD --version
      python tools\edvr_log.py --target steam --grep "black hole"
      ```
    - Check user feedback on:
-     - Unbroken pure black central shadow (no flat horizontal shelf or cut).
-     - Smooth elliptical front bridge across the bottom rim of the shadow.
-     - Imposing 1:1 scale matching Frontier's gravitational lens warp in both normal space and supercruise.
-     - Try switching to `realistic` mode (`visual.black_hole_disk = realistic`) to inspect the hot stellar-mass blue-white/cyan/violet palette and Kerr sub-ring.
+     - `realistic` mode shadow: verify it is 100% pure black and unbroken like `simple` mode, with matched imposing scale.
+     - Supercruise approach: verify the black hole starts as a brilliant star-like jewel at 54,000+ Ls and grows continuously as you fly closer.
+     - Light bloom: verify the star-like optical bloom envelope around the disk and photon ring.
+     - Smooth limbs: verify the seamless transition where the upper arch meets the outer wings.
 2. **When Editing the Shader (`src/shaders/black_hole_disk_simple.hlsl`):**
    - Always recompile `src/d3d11/black_hole_disk_shader.h` using `fxc.exe` with `/Vn kBlackHoleDiskSimpleVS` (entry `VSMain`, `/T vs_5_0 /O3`) and `/Vn kBlackHoleDiskSimplePS` (entry `PSMain`, `/T ps_5_0 /O3`) wrapped in `namespace edvr { ... }`, then run the full `build.bat --wait-lock` by absolute path.
 

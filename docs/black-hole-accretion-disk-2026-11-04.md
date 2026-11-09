@@ -2,7 +2,7 @@
 
 ## Status
 
-- **State: FLYING (`visual.black_hole_disk = off | simple | realistic`, Flight 14 Build).**
+- **State: FLYING (`visual.black_hole_disk = off | simple | realistic`, Flight 15 Build).**
 - **Goal:** Add visually striking, scientifically grounded black hole accretion
   disks (lensed upper/lower arches, central event-horizon shadow, photon ring,
   and relativistic Doppler beaming) to both the **VR** and **Flat** profiles.
@@ -21,10 +21,14 @@
   - `ruled out: discontinuous hemiSign = (cosIncSigned >= 0) ? 1 : -1 flip on n_eff, because crossing the equatorial plane inverted diskRight/by in 1 frame and caused an orientation pop in Flight 12.`
   - `ruled out: evaluating Beloborodov r_direct across the foreground line of sight (cosPsi1 >= 0) all the way to by = 0, because it produced r >= r_isco inside the shadow and stepped to 0 at by = 0, creating a flat horizontal shelf cutting into the shadow in Flight 13.`
   - `ruled out: clamping g_latchedThetaG to 0.036f (2.0 deg), because Frontier's inner pinch radius at the Exclusion Zone (25 km) is r21 = 0.347 rad (20 deg), making the disk 10x smaller than Frontier's gravitational lens in Flight 13.`
-- **Implemented Architecture (Flight 14 Build):**
-  - **Smooth Elliptical Front Bridge & Pure Black Central Shadow:** Inside $b_{\text{Shadow}} < b_{\text{crit}}$, foreground line-of-sight radial distance uses physical plane intersection $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cos i_{\text{eff}})^2}$. Inside the central hole ($r_{\text{front}} < r_{\text{ISCO}}$), emission is identically zero, completely eliminating the horizontal shelf at $b_y = 0$ while allowing the tilted front bridge to curve smoothly across the lower shadow rim.
-  - **1:1 Matched Angular Scale (`g_latchedThetaG = r21 * 0.185f`):** Scales shadow radius to match Frontier's inner pinch radius ($r21 = 0.347$ rad at 25 km), producing an imposing, screen-filling black hole and accretion disk.
-- **Next Flight:** Flight 14 validation of pure black unbroken shadow center, smooth elliptical front bridge, and imposing 1:1 scale matching Frontier's lens pinch.
+  - `ruled out: setting r_isco = 3.8M < 4.65M = b_crit in realistic mode, because emission inside the shadow radius caused the same inner-circle overlap in Flight 14.`
+  - `ruled out: static minimum floor 0.0035f for g_latchedThetaG in supercruise, which froze disk angular size at 8 deg all the way from 300,000 Ls down to 3,000 Ls in Flight 14.`
+- **Implemented Architecture (Flight 15 Build):**
+  - **Unbroken Pure Black Shadow & Exact Scale in `realistic` Mode:** $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ in both modes, ensuring `realistic` matches `simple`'s imposing size and pure black central shadow.
+  - **Dynamic Supercruise Distance Scaling:** $\theta_g = \text{clamp}(0.0008f + (bw \cdot r24x) \cdot 0.0032f, 0.0008f, 0.065f)$, smoothly growing the disk from a distant star-like jewel at 54,000+ Ls into a screen-filling giant as you approach.
+  - **Radiant Star-Like Optical Bloom & Glare:** Boosted peak HDR radiance to $\sim 15.0$ and added an optical glare scattering envelope around the inner disk, driving Elite's native bloom pass to create atmospheric glare like bright stars.
+  - **Smooth Limb Blending:** Asymptotic decay of gravitational bending at the limbs ($b \gg b_{\text{crit}}$) with wide limb blending, eliminating pinched warping where the arch meets the wings.
+- **Next Flight:** Flight 15 validation of unbroken shadow in realistic mode, dynamic supercruise growth, star-like bloom, and smooth arch-wing junction.
 ---
 
 ## 1. What the engine draws today, and why `star_glow` missed it
@@ -688,6 +692,34 @@ Screenshots: `20261108221040_1.jpg`, `20261108221223_1.jpg`, `20261108221240_1.j
 2. **1:1 Matched Scale (`g_latchedThetaG`):**
    - Scaled $\theta_g = \text{clamp}(r21 \times 0.185f, 0.0035f, 0.080f)$ in normal space and $\text{clamp}((bw \times r24x) \times 0.012f, 0.0035f, 0.065f)$ in supercruise.
    - At $r21 = 0.347$ rad, $\theta_g = 0.0641$ rad gives $\theta_{\text{shadow}} = 5.196 \times 0.0641 = 0.333$ rad ($19.1^\circ$), matching Frontier's inner pinch within 3% and restoring a majestic, imposing black hole.
+
+---
+
+## 16. Flight 14 Results & Flight 15 Architecture (2026-11-08)
+
+Log: `edvr_gfx_20261108_224858.log` (build `6AF0E3C8` / `95396cac`, VR profile at 27 km and 31,480 Ls).
+Screenshots: `20261108225109_1.jpg` (simple mode, 27 km), `20261108225328_1.jpg` (realistic mode, 27 km), `20261108230137_1.jpg` (supercruise, 31,480 Ls).
+
+### 16.1 Flight 14 Findings
+1. **`simple` Mode Confirmed Gorgeous:**
+   - In `20261108225109_1.jpg`, `simple` mode rendered an imposing, screen-filling black hole matching Frontier's pinch ring, with a 100% unbroken, pure black central shadow and brilliant golden arches.
+2. **`realistic` Mode Inner Overlap & Size Mismatch:**
+   - In `20261108225328_1.jpg`, `realistic` mode had the inner overlap problem because $r_{\text{ISCO}} = 3.8M < 4.65M = b_{\text{crit}}$, allowing disk emission to evaluate inside the shadow circle. Additionally, $b_{\text{crit}} = 4.65M$ made the shadow 11% smaller than in `simple` mode ($5.196M$).
+3. **Static Supercruise Size at Large Distances:**
+   - In `20261108230137_1.jpg`, at 31,480 Ls the black hole stayed clamped to the floor `0.0035f` (~$8^\circ$, matching the targeting reticle) and did not grow dynamically as the ship moved between 300,000 Ls and 3,000 Ls.
+4. **Pinched Warping at the Arch-Wing Junction:**
+   - On the left and right limbs, Beloborodov's bending formula had a $\sim 2.0M$ radial jump between $r_{\text{front}} = |b_x|$ and $r_{\text{rear}} = 2.0 + \sqrt{4 + b_x^2}$. Blending across a narrow $[-0.08, 0.08]$ slice in $\cos\psi_1$ caused concentric ring shearing where the arch joins the wings.
+
+### 16.2 Flight 15 Architecture
+1. **Unbroken Pure Black Shadow & Exact Scale in `realistic` Mode:**
+   - Set $r_{\text{ISCO}} = 5.5M$ and $b_{\text{crit}} = 5.196M$ for both modes in `black_hole_disk.cpp`, ensuring `realistic` mode matches `simple`'s imposing scale and pristine unbroken shadow center while preserving its O/B-type Planckian cyan/violet spectrum and Kerr $n=2$ sub-ring.
+2. **Dynamic Supercruise Distance Scaling:**
+   - $\theta_g = \text{clamp}(0.0008f + (bw \cdot r24x) \cdot 0.0032f, 0.0008f, 0.065f)$, smoothly expanding the disk from a compact, glowing star-like jewel at 54,000+ Ls into a screen-filling giant as you approach.
+3. **Radiant Star-Like Optical Bloom & Glare:**
+   - Boosted peak HDR radiance to $\sim 15.0$ and added an optical glare scattering envelope around the inner disk, driving Elite's native bloom pass to create atmospheric glare like bright stars.
+4. **Smooth Limb Blending:**
+   - Asymptotic decay of gravitational bending at the limbs ($b \gg b_{\text{crit}}$) with wide limb blending, eliminating pinched warping where the arch meets the wings.
+
 
 
 

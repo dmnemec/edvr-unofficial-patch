@@ -171,7 +171,7 @@ static bool  g_hasSkyInvViewProj[3] = { false, false, false };
 
 // Latched black hole world anchor
 static float g_latchedBhWorldDir[3] = { 0.0f, 0.0f, 1.0f };
-static float g_latchedThetaG = 0.025f;
+static float g_latchedThetaG = 0.0008f;
 static bool  g_hasLatchedBhWorldDir = false;
 static bool  g_hasSkyBhAnchor = false;
 static bool  g_lensCapturedNoted = false;
@@ -653,12 +653,14 @@ void blackHoleDiskAfterDraw(ID3D11DeviceContext* ctx, uint64_t vsHash, uint64_t 
                     // Match black hole shadow (b_crit ~ 5.2M) to Frontier's inner pinch radius r21:
                     // theta_g = r21 / b_crit = r21 / 5.196 ~ r21 * 0.1924f.
                     // Scale factor 0.185f matches the shadow boundary within 3% of Frontier's lens pinch.
-                    g_latchedThetaG = std::clamp(r21 * 0.185f, 0.0035f, 0.080f);
+                    g_latchedThetaG = std::clamp(r21 * 0.185f, 0.0008f, 0.080f);
                 } else if (bw * r24x > 1e-4f) {
-                    // Supercruise / mid-range weak lensing scale:
-                    g_latchedThetaG = std::clamp((bw * r24x) * 0.012f, 0.0035f, 0.065f);
+                    // Supercruise dynamic scaling: grows smoothly from distant star-like jewel (0.0008 rad)
+                    // at 54,000+ Ls to an imposing disk (0.065 rad) as you approach!
+                    float scTheta = 0.0008f + (bw * r24x) * 0.0032f;
+                    g_latchedThetaG = std::clamp(scTheta, 0.0008f, 0.065f);
                 } else {
-                    g_latchedThetaG = std::max(g_latchedThetaG, 0.0035f);
+                    g_latchedThetaG = std::max(g_latchedThetaG, 0.0008f);
                 }
             }
         }
@@ -882,9 +884,9 @@ void blackHoleDiskAfterDraw(ID3D11DeviceContext* ctx, uint64_t vsHash, uint64_t 
 
         if (mode == BlackHoleDiskMode::Realistic) {
             a_spin = 0.85f;
-            r_isco = 3.8f;
+            r_isco = 5.5f;       // Match ISCO outside b_crit so disk never overlaps inside the shadow!
             r_horizon = 1.5268f;
-            b_crit = 4.65f;
+            b_crit = 5.1961524f; // Match imposing size to simple mode!
             modeVal = 2.0f;
         }
 
