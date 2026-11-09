@@ -54,30 +54,29 @@
 
 ---
 
-## 3. What Was Just Built & Installed (Ready for Flight 13 Verification)
+## 3. What Was Just Built & Installed (Ready for Flight 14 Verification)
 
 The current working tree on `feat/black-hole-accretion-disk` has passed the full validation build (`build.bat --wait-lock`) and is installed on the Steam target (`D:\SteamLibrary\steamapps\common\Elite Dangerous\Products\elite-dangerous-odyssey-64`).
 
-### Changes in Flight 13 Build (Post-Flight 12 Feedback)
-1. **Removed the second blown-out tilted ghost disk in `realistic` mode:** Changed Sheet 3 (`GeodesicLut`) in `src/shaders/black_hole_disk_simple.hlsl` from `v_lut = (atan2(by, bx) + pi) / 2pi` to `v_lut = acos(clamp(cosPsi1, -1.0, 1.0)) / pi` with full `DiskStructureAndTurbulence` and Doppler beaming ($g^3$).
-2. **Implemented true stellar-mass O/B-type Planckian spectrum in `realistic` mode:** Differentiated `realistic` mode's color palette from `simple` mode's golden Gargantua palette so `realistic` reflects a hot stellar-mass black hole ($M \sim 5\text{--}20\,M_\odot$, $T_{\text{peak}} \ge 14,000\text{ K}$).
-3. **Eliminated the equatorial plane crossing pop:** Replaced discontinuous `hemiSign` / `n_eff` with fixed-chirality `(diskRight, diskUp)` and smooth `cosIncReg` / `byOriented`.
-4. **Increased angular size (`g_latchedThetaG`):** Raised `g_latchedThetaG` in `src/d3d11/black_hole_disk.cpp:652-658` to `clamp(r21 * 0.105f, 0.0022f, 0.036f)` and `clamp((bw * r24x) * 0.0065f, 0.0022f, 0.036f)` with `r_out = 20.0M`.
+### Changes in Flight 14 Build (Post-Flight 13 Feedback)
+1. **Eliminated the flat horizontal cut / shelf across the shadow:** Replaced Beloborodov ray evaluation across the foreground line of sight ($b_y < 0$) with the true physical equatorial plane intersection $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cosIncReg)^2}$. Inside the central hole ($r_{\text{front}} < r_{\text{ISCO}}$), emission is strictly zero, ensuring the central shadow is unbroken and pure black, while any front bridge crossing follows a smooth ellipse.
+2. **Restored 1:1 scale matching Frontier's inner pinch:** Changed `g_latchedThetaG` scaling to `clamp(r21 * 0.185f, 0.0035f, 0.080f)` in normal space and `clamp((bw * r24x) * 0.012f, 0.0035f, 0.065f)` in supercruise. At the 25-27 km Exclusion Zone ($r21 = 0.347$ rad), shadow radius is $0.333$ rad ($19.1^\circ$), matching Frontier's pinch within 3% and filling the forward canopy with an imposing, cinematic accretion disk.
 
 ---
 
 ## 4. Next Steps for the Next Agent
 
-1. **After Flight 13:**
+1. **After Flight 14:**
    - Verify the flight log matches the build:
      ```powershell
      python tools\edvr_log.py --target steam --expect-build HEAD --version
      python tools\edvr_log.py --target steam --grep "black hole"
      ```
    - Check user feedback on:
-     - Smooth transition when flying across the equatorial plane (top $\leftrightarrow$ bottom hemisphere).
-     - `realistic` mode single unified disk (no second tilted ghost disk) and stellar-mass blue-white/cyan/crimson-violet spectrum.
-     - Overall angular scale (`g_latchedThetaG`) in supercruise and normal space.
+     - Unbroken pure black central shadow (no flat horizontal shelf or cut).
+     - Smooth elliptical front bridge across the bottom rim of the shadow.
+     - Imposing 1:1 scale matching Frontier's gravitational lens warp in both normal space and supercruise.
+     - Try switching to `realistic` mode (`visual.black_hole_disk = realistic`) to inspect the hot stellar-mass blue-white/cyan/violet palette and Kerr sub-ring.
 2. **When Editing the Shader (`src/shaders/black_hole_disk_simple.hlsl`):**
    - Always recompile `src/d3d11/black_hole_disk_shader.h` using `fxc.exe` with `/Vn kBlackHoleDiskSimpleVS` (entry `VSMain`, `/T vs_5_0 /O3`) and `/Vn kBlackHoleDiskSimplePS` (entry `PSMain`, `/T ps_5_0 /O3`) wrapped in `namespace edvr { ... }`, then run the full `build.bat --wait-lock` by absolute path.
 

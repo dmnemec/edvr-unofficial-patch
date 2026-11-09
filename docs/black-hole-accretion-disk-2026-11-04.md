@@ -2,7 +2,7 @@
 
 ## Status
 
-- **State: FLYING (`visual.black_hole_disk = off | simple | realistic`).**
+- **State: FLYING (`visual.black_hole_disk = off | simple | realistic`, Flight 14 Build).**
 - **Goal:** Add visually striking, scientifically grounded black hole accretion
   disks (lensed upper/lower arches, central event-horizon shadow, photon ring,
   and relativistic Doppler beaming) to both the **VR** and **Flat** profiles.
@@ -19,11 +19,12 @@
   - `ruled out: smooth featureless DiskEmissionProfile out to r_out = 30.0 with separate flat Sheet 1 + oval Sheet 2, because it filled the outer region with a featureless yellow haze and compressed the realistic-mode arch into 2 pixels on the photon ring in Flight 11.`
   - `ruled out: indexing GeodesicLut v_lut with raw screen angle atan2(by, bx) instead of 3D geodesic bending angle acos(cosPsi1)/pi, because it drew a second unforeshortened ghost disk at a mismatched angle in realistic mode in Flight 12.`
   - `ruled out: discontinuous hemiSign = (cosIncSigned >= 0) ? 1 : -1 flip on n_eff, because crossing the equatorial plane inverted diskRight/by in 1 frame and caused an orientation pop in Flight 12.`
-- **Implemented Architecture (Flight 13 Build):**
-  - **Continuous $C^\infty$ Equator Crossing & Fixed-Chirality Screen Basis:** `diskUp`/`diskRight` derive directly from fixed `n_disk` without sign flips; `cosIncReg = sqrt(cosIncSigned^2 + 0.08^2)` and `byOriented = by * (cosIncSigned / cosIncReg)` transition smoothly across the equatorial plane with zero pop.
-  - **3D-Aligned Kerr Geodesic LUT & True Stellar-Mass O/B Spectrum (`realistic`):** `v_lut = acos(cosPsi1) / pi` aligns the Kerr $n=2$ sub-ring with the 3D disk plane. `simple` keeps the cinematic Interstellar golden-amber palette ($5,500\text{ K}$), while `realistic` renders the astrophysical stellar-mass ($M \sim 10 M_\odot, T_{\text{peak}} \ge 14,000\text{ K}$) Planckian blue-white/cyan/violet spectrum with Kerr frame-dragging shadow shift (`0.32 * a_spin * sinIncMag`).
-  - **Restored Angular Scale (`g_latchedThetaG`):** `r21 * 0.105f` (up to `0.036` rad) and `(bw * r24x) * 0.0065f` (min `0.0022` rad) restore an imposing black hole scale across normal space and supercruise.
-- **Next Flight:** Flight 13 validation of smooth equator crossing, aligned realistic Kerr sub-ring + blue-white stellar-mass spectrum, and larger angular size.
+  - `ruled out: evaluating Beloborodov r_direct across the foreground line of sight (cosPsi1 >= 0) all the way to by = 0, because it produced r >= r_isco inside the shadow and stepped to 0 at by = 0, creating a flat horizontal shelf cutting into the shadow in Flight 13.`
+  - `ruled out: clamping g_latchedThetaG to 0.036f (2.0 deg), because Frontier's inner pinch radius at the Exclusion Zone (25 km) is r21 = 0.347 rad (20 deg), making the disk 10x smaller than Frontier's gravitational lens in Flight 13.`
+- **Implemented Architecture (Flight 14 Build):**
+  - **Smooth Elliptical Front Bridge & Pure Black Central Shadow:** Inside $b_{\text{Shadow}} < b_{\text{crit}}$, foreground line-of-sight radial distance uses physical plane intersection $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cos i_{\text{eff}})^2}$. Inside the central hole ($r_{\text{front}} < r_{\text{ISCO}}$), emission is identically zero, completely eliminating the horizontal shelf at $b_y = 0$ while allowing the tilted front bridge to curve smoothly across the lower shadow rim.
+  - **1:1 Matched Angular Scale (`g_latchedThetaG = r21 * 0.185f`):** Scales shadow radius to match Frontier's inner pinch radius ($r21 = 0.347$ rad at 25 km), producing an imposing, screen-filling black hole and accretion disk.
+- **Next Flight:** Flight 14 validation of pure black unbroken shadow center, smooth elliptical front bridge, and imposing 1:1 scale matching Frontier's lens pinch.
 ---
 
 ## 1. What the engine draws today, and why `star_glow` missed it
@@ -663,6 +664,31 @@ User observations:
    - Replaced the hard clamp `clamp(abs(cosIncSigned), 0.12, 0.96)` with the smooth $C^\infty$ regularizer `cosIncReg = sqrt(cosIncSigned * cosIncSigned + 0.08 * 0.08)` and continuous `byOriented = by * (cosIncSigned / cosIncReg)`, so flying across the equatorial plane smoothly transitions the front bridge from bottom to top through a symmetric edge-on cross with zero pop.
 4. **Larger Angular Scale (`g_latchedThetaG`):**
    - Increased `g_latchedThetaG` scaling in `src/d3d11/black_hole_disk.cpp:652-658` to `clamp(r21 * 0.105f, 0.0022f, 0.036f)` and `clamp((bw * r24x) * 0.0065f, 0.0022f, 0.036f)` with `r_out = 20.0M`, more than doubling the supercruise/mid-range angular size and increasing close-range scale by ~65%.
+
+---
+
+## 15. Flight 13 Results & Flight 14 Architecture (2026-11-08)
+
+Log: `edvr_gfx_20261108_220646.log` (build `6AF0E3C8`, VR profile at 27 km Exclusion Zone).
+Screenshots: `20261108221040_1.jpg`, `20261108221223_1.jpg`, `20261108221240_1.jpg`, `20261108221248_1.jpg`.
+
+### 15.1 Flight 13 Findings
+1. **The Horizontal Cut / Disk Half-Way Across Shadow:**
+   - In `20261108221223_1.jpg` and `20261108221248_1.jpg`, the upper half of the shadow was pure black with a clean photon ring, while the lower half was filled by the accretion disk with a flat horizontal knife-edge cut across the diameter at $b_y = 0$.
+   - **Root Cause:** Sheet 1 calculated $r_{\text{direct}}$ via Beloborodov's formula $(r_{\text{lens}} + \sqrt{r_{\text{lens}}^2 + b^2 \text{ratio}_1}) / (1 + \cos\psi_1)$. When $b_y \to 0^-$, $\cos\psi_1 \to 0$ and $\text{ratio}_1 \to 1.0$, yielding $r_{\text{direct}} \approx 2.0 + \sqrt{4 + b^2} \ge 6.0M \ge r_{\text{ISCO}}$ inside the shadow. For $b_y < 0$, `frontBridgeWeight` was $1.0$ (`vis1 = 1.0`), drawing disk emission inside the shadow. For $b_y > 0$, `frontBridgeWeight` was $0.0$, so `vis1` stepped to $0.0$, creating a sharp cut at $b_y = 0$.
+   - **Physics:** An accretion disk only exists for $r \ge r_{\text{ISCO}}$. Inside $r < r_{\text{ISCO}}$, the disk is empty vacuum. For foreground line-of-sight rays, the radial coordinate on the physical disk plane is $r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cos i_{\text{eff}})^2}$. Inside the central hole ($r_{\text{front}} < r_{\text{ISCO}}$), emission is strictly zero.
+2. **Angular Size Too Small:**
+   - In Flight 13, Frontier's sky dome reported $r21 = 0.34666$ rad ($19.86^\circ$ radius, $40^\circ$ diameter). However, `g_latchedThetaG` was clamped to $0.036f$ ($2.06^\circ$), making the shadow radius only $0.187$ rad ($10.7^\circ$)—half the radius of Frontier's inner pinch and 10x smaller than the surrounding gravitational warp.
+
+### 15.2 Flight 14 Fixes
+1. **Physical Plane Foreground Intersection (`r_front`):**
+   - In `src/shaders/black_hole_disk_simple.hlsl`, rays inside $b_{\text{Shadow}} < b_{\text{crit}}$ evaluate $r_{\text{direct}} = r_{\text{front}} = \sqrt{b_x^2 + (b_y / \cosIncReg)^2}$.
+   - Where $r_{\text{front}} < r_{\text{ISCO}}$, `DiskEmissionProfile` returns 0.0, guaranteeing an unbroken, pure black event-horizon shadow with zero horizontal shelf.
+   - Where $r_{\text{front}} \ge r_{\text{ISCO}}$, the disk shines across the front of the shadow following a smooth, continuous ellipse $b_x^2 + (b_y / \cosIncReg)^2 = r_{\text{ISCO}}^2$.
+2. **1:1 Matched Scale (`g_latchedThetaG`):**
+   - Scaled $\theta_g = \text{clamp}(r21 \times 0.185f, 0.0035f, 0.080f)$ in normal space and $\text{clamp}((bw \times r24x) \times 0.012f, 0.0035f, 0.065f)$ in supercruise.
+   - At $r21 = 0.347$ rad, $\theta_g = 0.0641$ rad gives $\theta_{\text{shadow}} = 5.196 \times 0.0641 = 0.333$ rad ($19.1^\circ$), matching Frontier's inner pinch within 3% and restoring a majestic, imposing black hole.
+
 
 
 

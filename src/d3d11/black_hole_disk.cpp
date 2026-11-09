@@ -171,7 +171,7 @@ static bool  g_hasSkyInvViewProj[3] = { false, false, false };
 
 // Latched black hole world anchor
 static float g_latchedBhWorldDir[3] = { 0.0f, 0.0f, 1.0f };
-static float g_latchedThetaG = 0.018f;
+static float g_latchedThetaG = 0.025f;
 static bool  g_hasLatchedBhWorldDir = false;
 static bool  g_hasSkyBhAnchor = false;
 static bool  g_lensCapturedNoted = false;
@@ -650,11 +650,15 @@ void blackHoleDiskAfterDraw(ID3D11DeviceContext* ctx, uint64_t vsHash, uint64_t 
                 g_hasSkyBhAnchor = true;
 
                 if (r21 > 1e-4f) {
-                    g_latchedThetaG = std::clamp(r21 * 0.105f, 0.0022f, 0.036f);
+                    // Match black hole shadow (b_crit ~ 5.2M) to Frontier's inner pinch radius r21:
+                    // theta_g = r21 / b_crit = r21 / 5.196 ~ r21 * 0.1924f.
+                    // Scale factor 0.185f matches the shadow boundary within 3% of Frontier's lens pinch.
+                    g_latchedThetaG = std::clamp(r21 * 0.185f, 0.0035f, 0.080f);
                 } else if (bw * r24x > 1e-4f) {
-                    g_latchedThetaG = std::clamp((bw * r24x) * 0.0065f, 0.0022f, 0.036f);
+                    // Supercruise / mid-range weak lensing scale:
+                    g_latchedThetaG = std::clamp((bw * r24x) * 0.012f, 0.0035f, 0.065f);
                 } else {
-                    g_latchedThetaG = std::max(g_latchedThetaG, 0.0022f);
+                    g_latchedThetaG = std::max(g_latchedThetaG, 0.0035f);
                 }
             }
         }

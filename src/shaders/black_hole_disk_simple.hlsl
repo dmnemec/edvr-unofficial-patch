@@ -263,26 +263,50 @@ float4 PSMain(VSOutput input) : SV_TARGET
     float3 hitInPlane1 = hitDir1 - dot(hitDir1, n_disk) * n_disk;
     float phi1 = atan2(dot(hitInPlane1, v_disk), dot(hitInPlane1, u_disk));
 
-    // Exact Beloborodov (2002) / Schwarzschild-Kerr weak-to-strong light-bending radial intersection:
-    //   1 - cos(alpha) = (1 - cos(psi_1)) * (1 - r_lens / r)
+    // True physical radial distance on the tilted equatorial accretion disk plane (front bridge):
+    // In front of the black hole, the observer looks directly at the equatorial disk plane before
+    // the line of sight reaches the black hole. The radial coordinate is the smooth ellipse:
+    //   r_front = sqrt(bx^2 + (byOriented / cosIncReg)^2).
+    // Inside the disk's central hole (r_front < r_isco), DiskEmissionProfile(r_front) is IDENTICALLY ZERO.
+    // This eliminates the artificial horizontal cut/shelf and preserves a pure black event horizon shadow!
+    float y_disk_plane = byOriented / cosIncReg;
+    float r_front = sqrt(bx * bx + y_disk_plane * y_disk_plane);
+
+    // Exact Beloborodov (2002) / Schwarzschild-Kerr light-bending for Rear Bent Arch (cosPsi1 < 0):
+    // Light emitted from behind the black hole bends over the top of the event horizon.
     float r_lens = (mode > 1.5) ? 1.85 : 2.00;
     float ratio1 = (1.0 + cosPsi1) / max(1.0 - cosPsi1, 1e-4);
-    float r_direct = (r_lens + sqrt(r_lens * r_lens + bShadow * bShadow * ratio1)) / max(1.0 + cosPsi1, 0.06);
+    float r_rear = (r_lens + sqrt(r_lens * r_lens + bShadow * bShadow * ratio1)) / max(1.0 + cosPsi1, 0.06);
 
     // Near the photon sphere (bShadow -> b_crit on the rear side cosPsi1 < 0), pull the inner edge of the
     // bent rear arch smoothly down to r_isco right outside b_crit so the entire disk wraps over the shadow:
     if (cosPsi1 < 0.0 && bShadow > b_crit)
     {
         float archPull = exp(-max(bShadow - b_crit, 0.0) / 1.8);
-        r_direct = lerp(r_direct, r_isco + (bShadow - b_crit) * 1.55, archPull * (-cosPsi1));
+        r_rear = lerp(r_rear, r_isco + (bShadow - b_crit) * 1.55, archPull * (-cosPsi1));
+    }
+
+    // Determine effective radial emission coordinate r_direct:
+    // Inside the shadow (bShadow < b_crit), light from behind the black hole is captured by the event horizon.
+    // Therefore, any emission inside the shadow can ONLY originate from the foreground disk plane (r_front).
+    // Outside the shadow (bShadow > b_crit), smoothly blend between the rear bent arch and front bridge:
+    float frontBridgeWeight = smoothstep(-0.08, 0.08, cosPsi1);
+    float r_direct;
+    if (bShadow < b_crit)
+    {
+        r_direct = r_front;
+    }
+    else
+    {
+        r_direct = lerp(r_rear, r_front, frontBridgeWeight);
     }
 
     // Visibility rule for Sheet 1:
-    // - On the front side of the disk (cosPsi1 >= 0, in front of the black hole), rays with r_direct >= r_isco
-    //   emit in front of the black hole and cross directly over the event horizon shadow (bShadow < b_crit)!
     // - On the rear side of the disk (cosPsi1 < 0, wrapping over the back of the black hole), rays with bShadow < b_crit
-    //   pass inside the photon sphere and are occluded by the black hole shadow!
-    float frontBridgeWeight   = smoothstep(-0.08, 0.08, cosPsi1);
+    //   pass inside the photon sphere and are occluded by the black hole shadow (outsideShadowWeight = 0).
+    // - On the front side of the disk (cosPsi1 >= 0, in front of the black hole), rays cross the equatorial plane
+    //   in front of the black hole. Where r_front >= r_isco, the glowing disk is visible in front of the shadow.
+    //   Where r_front < r_isco, DiskEmissionProfile(r_front) returns 0, preserving 100% pure black shadow!
     float outsideShadowWeight = smoothstep(b_crit * 0.96, b_crit * 1.03, bShadow);
     float vis1 = lerp(outsideShadowWeight, 1.0, frontBridgeWeight);
 
